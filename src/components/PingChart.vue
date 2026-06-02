@@ -9,7 +9,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppStore } from '@/stores/app'
-import { cutPeakValues, interpolateNullsLinear } from '@/utils/recordHelper'
+import { smoothValidSegments } from '@/utils/recordHelper'
 import { getSharedRpc } from '@/utils/rpc'
 import '@/utils/echarts' // 共享 ECharts 配置
 
@@ -45,6 +45,9 @@ const chartColors = [
   '#34D399', // 翠绿色
   '#FB923C', // 橙色
 ]
+const packetLossColor = '#FACC15'
+const packetLossSeriesName = '丢包率'
+const tooltipEscapedCharsRegex = /[&<>"']/g
 
 // 从 publicSettings 获取记录保留时间
 const maxPingRecordPreserveTime = computed(() => appStore.publicSettings?.ping_record_preserve_time || 168)
@@ -142,12 +145,12 @@ const error = ref<string | null>(null)
 // 任务选择
 const selectedTaskIds = ref<number[]>([])
 const isDefaultAllTasks = ref(true)
-const cutPeak = ref(false)
+const smoothDelay = ref(false)
 const isTouchTooltipMode = ref(false)
 const activeTaskTooltipId = ref<number | null>(null)
 const smoothInfoTooltipOpen = ref(false)
 
-const chartMargin = { top: 30, right: 24, bottom: 52, left: 56 }
+const chartMargin = { top: 30, right: 58, bottom: 52, left: 56 }
 let coarsePointerMediaQuery: MediaQueryList | null = null
 
 function syncTouchTooltipMode() {
@@ -265,7 +268,9 @@ const mergedData = computed(() => {
     }
 
     const group = grouped.get(useTs)!
-    group[rec.task_id] = rec.value < 0 ? null : rec.value
+    const isLost = rec.value < 0
+    group[rec.task_id] = isLost ? null : rec.value
+    group[getPacketLossKey(rec.task_id)] = isLost ? 100 : 0
   }
 
   const merged = Array.from(grouped.values()).sort(
@@ -299,16 +304,8 @@ const chartData = computed(() => {
   if (selectedKeys.length === 0)
     return []
 
-  if (cutPeak.value) {
-    data = cutPeakValues(data, selectedKeys)
-  }
-
-  if (selectedKeys.length > 0 && data.length > 0) {
-    data = interpolateNullsLinear(data, selectedKeys, {
-      maxGapMultiplier: 6,
-      minCapMs: 2 * 60_000,
-      maxCapMs: 30 * 60_000,
-    })
+  if (smoothDelay.value) {
+    data = smoothValidSegments(data, selectedKeys)
   }
 
   return data
@@ -332,6 +329,37 @@ function formatTimeForTooltip(time: string, hours: number): string {
   return date.format('MM/DD HH:mm')
 }
 
+function getPacketLossKey(taskId: number): string {
+  return `${taskId}:packet-loss`
+}
+
+function getPacketLossRate(row: Record<string, unknown>, taskList: TaskInfo[]): number | null {
+  let observedCount = 0
+  let lostCount = 0
+
+  for (const task of taskList) {
+    const loss = row[getPacketLossKey(task.id)]
+    if (typeof loss !== 'number')
+      continue
+
+    observedCount += 1
+    if (loss > 0)
+      lostCount += 1
+  }
+
+  return observedCount > 0 ? lostCount / observedCount * 100 : null
+}
+
+function escapeTooltipText(value: string): string {
+  return value.replace(tooltipEscapedCharsRegex, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    '\'': '&#39;',
+  })[char]!)
+}
+
 const showDateInAxis = computed(() => selectedHours.value >= 24)
 
 // ==================== 任务选择 ====================
@@ -343,27 +371,35 @@ function getTaskColor(taskId: number): string {
   return chartColors[safeIndex]!
 }
 
+const taskLossRates = computed(() => {
+  const counts = new Map<number, { lost: number, total: number }>()
+
+  for (const record of remoteData.value) {
+    const count = counts.get(record.task_id) ?? { lost: 0, total: 0 }
+    count.total += 1
+    if (record.value < 0)
+      count.lost += 1
+    counts.set(record.task_id, count)
+  }
+
+  return new Map(
+    Array.from(counts.entries(), ([taskId, count]) => [
+      taskId,
+      count.total > 0 ? count.lost / count.total * 100 : 0,
+    ]),
+  )
+})
+
 // 最新值统计（从服务端 tasks 获取，保持颜色顺序）
 const latestValues = computed(() => {
   if (!tasks.value.length)
     return []
 
-  const latestMap = new Map<number, number | null>()
-  for (const task of tasks.value) {
-    for (let i = remoteData.value.length - 1; i >= 0; i--) {
-      const rec = remoteData.value[i]
-      if (rec && rec.task_id === task.id && rec.value >= 0) {
-        latestMap.set(task.id, rec.value)
-        break
-      }
-    }
-  }
-
   return tasks.value.map((task, idx) => {
     const safeIdx = Math.max(0, idx % chartColors.length)
     return {
       ...task,
-      latestValue: latestMap.get(task.id) ?? null,
+      loss: taskLossRates.value.get(task.id) ?? task.loss,
       color: chartColors[safeIdx]!,
     }
   })
@@ -441,27 +477,35 @@ const pingChartOption = computed(() => {
   const data = chartData.value
   const hours = selectedHours.value
 
-  // 构建 series，确保颜色与卡片一致
-  const series = taskList.map((task) => {
+  const packetLossData = data.map(row => getPacketLossRate(row, taskList))
+  const delaySeries = taskList.map((task) => {
     const color = getTaskColor(task.id)
     return {
       name: task.name,
       type: 'line' as const,
       data: data.map(d => d[task.id] as number | null ?? null),
-      smooth: cutPeak.value ? 0.6 : 0.1,
+      yAxisIndex: 0,
+      smooth: smoothDelay.value ? 0.6 : false,
       showSymbol: false,
       connectNulls: false,
       lineStyle: { width: 1.5, color, cap: 'round' as const },
       itemStyle: { color }, // 确保 symbol 颜色一致
+      z: 2,
     }
   })
-
-  // 颜色映射表（用于 Tooltip）
-  const colorMap = new Map<number, string>()
-  tasks.value.forEach((task, idx) => {
-    const safeIdx = Math.max(0, idx % chartColors.length)
-    colorMap.set(task.id, chartColors[safeIdx]!)
-  })
+  const packetLossSeries = {
+    name: packetLossSeriesName,
+    type: 'line' as const,
+    data: packetLossData,
+    yAxisIndex: 1,
+    smooth: false,
+    showSymbol: false,
+    connectNulls: false,
+    lineStyle: { width: 0, color: packetLossColor },
+    itemStyle: { color: packetLossColor },
+    areaStyle: { color: packetLossColor, opacity: 0.3 },
+    z: 1,
+  }
 
   return {
     animation: false,
@@ -473,7 +517,7 @@ const pingChartOption = computed(() => {
     tooltip: {
       ...baseTooltipConfig.value,
       formatter: (params: unknown) => {
-        const p = params as Array<{ seriesName: string, value: number | null, dataIndex: number }>
+        const p = params as Array<{ dataIndex: number }>
         if (!p.length)
           return ''
         const firstParam = p[0]
@@ -488,17 +532,35 @@ const pingChartOption = computed(() => {
         let html = `<div style="font-weight:600;margin-bottom:6px;color:${chartThemeColors.value.textSecondary}">${timeStr}</div>`
         html += '<div style="display:flex;flex-direction:column;gap:4px">'
 
-        // 按延迟值排序显示
-        const sortedParams = [...p].sort((a, b) => (a.value ?? 0) - (b.value ?? 0))
+        const packetLoss = getPacketLossRate(rowData, taskList)
+        if (packetLoss !== null) {
+          const lossDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${packetLossColor};margin-right:8px;flex-shrink:0"></span>`
+          html += `<div style="display:flex;align-items:center">${lossDot}<span style="flex:1">丢包率</span><span style="margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums">${packetLoss.toFixed(2)}%</span></div>`
+        }
 
-        for (const item of sortedParams) {
-          if (item.value !== null && item.value !== undefined) {
-            // 通过任务名找到对应的任务ID，再获取颜色
-            const task = tasks.value.find(t => t.name === item.seriesName)
-            const color = task ? colorMap.get(task.id) || chartColors[0] : chartColors[0]
-            const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:8px;flex-shrink:0"></span>`
-            html += `<div style="display:flex;align-items:center">${colorDot}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.seriesName}</span><span style="margin-left:auto;font-weight:600;margin-left:16px;font-variant-numeric:tabular-nums">${Math.round(item.value)} ms</span></div>`
-          }
+        const taskRows = taskList
+          .map((task) => {
+            const delay = rowData[task.id]
+            return {
+              color: getTaskColor(task.id),
+              delay: typeof delay === 'number' ? delay : null,
+              lost: rowData[getPacketLossKey(task.id)] === 100,
+              name: task.name,
+            }
+          })
+          .filter(item => item.lost || item.delay !== null)
+          .sort((a, b) => {
+            if (a.lost !== b.lost)
+              return a.lost ? -1 : 1
+            return (a.delay ?? Number.POSITIVE_INFINITY) - (b.delay ?? Number.POSITIVE_INFINITY)
+          })
+
+        for (const item of taskRows) {
+          const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color};margin-right:8px;flex-shrink:0"></span>`
+          const value = item.lost
+            ? '<span style="color:#EF4444">探测失败</span>'
+            : `${Math.round(item.delay as number)} ms`
+          html += `<div style="display:flex;align-items:center">${colorDot}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeTooltipText(item.name)}</span><span style="margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums">${value}</span></div>`
         }
         html += '</div>'
         return html
@@ -530,21 +592,36 @@ const pingChartOption = computed(() => {
       axisTick: { show: false },
       boundaryGap: false,
     },
-    yAxis: {
-      type: 'value',
-      name: '延迟 (ms)',
-      nameTextStyle: { color: chartThemeColors.value.textSecondary },
-      axisLabel: { fontSize: 11, color: chartThemeColors.value.textSecondary, formatter: '{value}' },
-      axisLine: { show: false },
-      axisTick: { show: false },
-      splitLine: {
-        lineStyle: {
-          color: chartThemeColors.value.splitLineColor,
-          type: 'dashed' as const,
+    yAxis: [
+      {
+        type: 'value',
+        name: '延迟 (ms)',
+        nameTextStyle: { color: chartThemeColors.value.textSecondary },
+        axisLabel: { fontSize: 11, color: chartThemeColors.value.textSecondary, formatter: '{value}' },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: {
+          lineStyle: {
+            color: chartThemeColors.value.splitLineColor,
+            type: 'dashed' as const,
+          },
         },
       },
-    },
-    series,
+      {
+        type: 'value',
+        name: '丢包率 (%)',
+        min: 0,
+        max: 100,
+        interval: 25,
+        position: 'right',
+        nameTextStyle: { color: chartThemeColors.value.textSecondary },
+        axisLabel: { fontSize: 11, color: chartThemeColors.value.textSecondary, formatter: '{value}%' },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+      },
+    ],
+    series: [packetLossSeries, ...delaySeries],
   }
 })
 
@@ -661,7 +738,7 @@ onBeforeUnmount(() => {
                         </template>
                         <template v-if="task.latest !== undefined">
                           <span class="text-muted-foreground">最新</span>
-                          <span class="font-medium">{{ Math.round(task.latest) }} ms</span>
+                          <span class="font-medium">{{ task.latest >= 0 ? `${Math.round(task.latest)} ms` : '丢包' }}</span>
                         </template>
                         <template v-if="task.p50 !== undefined">
                           <span class="text-muted-foreground">P50</span>
@@ -707,15 +784,15 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 平滑峰值开关 -->
+        <!-- 平滑延迟开关 -->
         <div class="flex flex-wrap gap-4 items-center py-2 justify-between">
           <TooltipProvider>
             <div class="flex gap-2 items-center">
               <Button
                 variant="ghost" size="xs" class="h-7 rounded-sm bg-background/50 hover:bg-background border-none"
-                :class="cutPeak && 'shadow-[0_0_0_2px] shadow-green-600/10 text-green-600'" @click="cutPeak = !cutPeak"
+                :class="smoothDelay && 'shadow-[0_0_0_2px] shadow-green-600/10 text-green-600'" @click="smoothDelay = !smoothDelay"
               >
-                平滑峰值
+                平滑延迟
               </Button>
               <Tooltip
                 :open="isTouchTooltipMode ? smoothInfoTooltipOpen : undefined"
@@ -727,7 +804,7 @@ onBeforeUnmount(() => {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <span>使用 EWMA 算法平滑数据并过滤突变值</span>
+                  <span>仅平滑连续的有效延迟段，丢包点始终保留断线</span>
                 </TooltipContent>
               </Tooltip>
             </div>
