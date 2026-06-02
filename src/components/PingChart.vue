@@ -9,7 +9,6 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppStore } from '@/stores/app'
-import { smoothValidSegments } from '@/utils/recordHelper'
 import { getSharedRpc } from '@/utils/rpc'
 import '@/utils/echarts' // 共享 ECharts 配置
 
@@ -136,6 +135,18 @@ interface PingRecordsResponse {
   to?: string
 }
 
+interface RawTaskStats {
+  avg?: number
+  latest?: number
+  loss: number
+  max?: number
+  min?: number
+  p50?: number
+  p99?: number
+  p99_p50_ratio?: number
+  total: number
+}
+
 // 数据状态
 const remoteData = shallowRef<PingRecord[]>([])
 const tasks = shallowRef<TaskInfo[]>([])
@@ -145,10 +156,8 @@ const error = ref<string | null>(null)
 // 任务选择
 const selectedTaskIds = ref<number[]>([])
 const isDefaultAllTasks = ref(true)
-const smoothDelay = ref(false)
 const isTouchTooltipMode = ref(false)
 const activeTaskTooltipId = ref<number | null>(null)
-const smoothInfoTooltipOpen = ref(false)
 
 const chartMargin = { top: 30, right: 58, bottom: 52, left: 56 }
 let coarsePointerMediaQuery: MediaQueryList | null = null
@@ -173,17 +182,6 @@ function toggleTaskTooltip(taskId: number) {
     return
 
   activeTaskTooltipId.value = activeTaskTooltipId.value === taskId ? null : taskId
-  smoothInfoTooltipOpen.value = false
-}
-
-function toggleSmoothInfoTooltip() {
-  if (!isTouchTooltipMode.value)
-    return
-
-  smoothInfoTooltipOpen.value = !smoothInfoTooltipOpen.value
-  if (smoothInfoTooltipOpen.value) {
-    activeTaskTooltipId.value = null
-  }
 }
 
 // ==================== 数据获取 ====================
@@ -269,6 +267,7 @@ const mergedData = computed(() => {
 
     const group = grouped.get(useTs)!
     const isLost = rec.value < 0
+    // 丢包只进入右轴峰值；延迟序列必须保留 null，不能伪造延迟值。
     group[rec.task_id] = isLost ? null : rec.value
     group[getPacketLossKey(rec.task_id)] = isLost ? 100 : 0
   }
@@ -295,20 +294,6 @@ const mergedData = computed(() => {
   }
 
   return merged.slice(startIdx)
-})
-
-const chartData = computed(() => {
-  let data = mergedData.value
-  const selectedKeys = selectedTaskIds.value.map(String)
-
-  if (selectedKeys.length === 0)
-    return []
-
-  if (smoothDelay.value) {
-    data = smoothValidSegments(data, selectedKeys)
-  }
-
-  return data
 })
 
 // ==================== 工具函数 ====================
@@ -360,6 +345,32 @@ function escapeTooltipText(value: string): string {
   })[char]!)
 }
 
+function getAverage(values: number[]): number | undefined {
+  if (!values.length)
+    return undefined
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function getPercentile(values: number[], percentile: number): number | undefined {
+  if (!values.length)
+    return undefined
+
+  const sorted = [...values].sort((a, b) => a - b)
+  const position = Math.min(sorted.length - 1, Math.max(0, (sorted.length - 1) * percentile))
+  const lowerIndex = Math.floor(position)
+  const upperIndex = Math.ceil(position)
+  const lowerValue = sorted[lowerIndex]
+  const upperValue = sorted[upperIndex]
+
+  if (lowerValue === undefined || upperValue === undefined)
+    return undefined
+  if (lowerIndex === upperIndex)
+    return lowerValue
+
+  return lowerValue + (upperValue - lowerValue) * (position - lowerIndex)
+}
+
 const showDateInAxis = computed(() => selectedHours.value >= 24)
 
 // ==================== 任务选择 ====================
@@ -371,26 +382,44 @@ function getTaskColor(taskId: number): string {
   return chartColors[safeIndex]!
 }
 
-const taskLossRates = computed(() => {
-  const counts = new Map<number, { lost: number, total: number }>()
+const rawTaskStats = computed(() => {
+  const recordsByTask = new Map<number, PingRecord[]>()
 
   for (const record of remoteData.value) {
-    const count = counts.get(record.task_id) ?? { lost: 0, total: 0 }
-    count.total += 1
-    if (record.value < 0)
-      count.lost += 1
-    counts.set(record.task_id, count)
+    const records = recordsByTask.get(record.task_id) ?? []
+    records.push(record)
+    recordsByTask.set(record.task_id, records)
   }
 
   return new Map(
-    Array.from(counts.entries(), ([taskId, count]) => [
-      taskId,
-      count.total > 0 ? count.lost / count.total * 100 : 0,
-    ]),
+    tasks.value.map((task) => {
+      const records = recordsByTask.get(task.id) ?? []
+      const successfulValues = records
+        .map(record => record.value)
+        .filter(value => value >= 0)
+      const p50 = getPercentile(successfulValues, 0.5)
+      const p99 = getPercentile(successfulValues, 0.99)
+
+      return [task.id, {
+        avg: getAverage(successfulValues),
+        latest: records.at(-1)?.value,
+        loss: records.length > 0
+          ? (records.length - successfulValues.length) / records.length * 100
+          : 0,
+        max: successfulValues.length ? Math.max(...successfulValues) : undefined,
+        min: successfulValues.length ? Math.min(...successfulValues) : undefined,
+        p50,
+        p99,
+        p99_p50_ratio: p50 !== undefined && p99 !== undefined && p50 > 0
+          ? p99 / p50
+          : undefined,
+        total: records.length,
+      } satisfies RawTaskStats]
+    }),
   )
 })
 
-// 最新值统计（从服务端 tasks 获取，保持颜色顺序）
+// 使用原始成功/失败记录计算统计值，保持任务颜色顺序
 const latestValues = computed(() => {
   if (!tasks.value.length)
     return []
@@ -399,7 +428,7 @@ const latestValues = computed(() => {
     const safeIdx = Math.max(0, idx % chartColors.length)
     return {
       ...task,
-      loss: taskLossRates.value.get(task.id) ?? task.loss,
+      ...rawTaskStats.value.get(task.id),
       color: chartColors[safeIdx]!,
     }
   })
@@ -474,7 +503,7 @@ const baseTooltipConfig = computed(() => ({
 
 const pingChartOption = computed(() => {
   const taskList = selectedTasks.value
-  const data = chartData.value
+  const data = mergedData.value
   const hours = selectedHours.value
 
   const packetLossData = data.map(row => getPacketLossRate(row, taskList))
@@ -483,11 +512,12 @@ const pingChartOption = computed(() => {
     return {
       name: task.name,
       type: 'line' as const,
-      data: data.map(d => d[task.id] as number | null ?? null),
+      data: data.map(d => (d[task.id] as number | null | undefined) ?? null),
       yAxisIndex: 0,
-      smooth: smoothDelay.value ? 0.6 : false,
+      smooth: false,
       showSymbol: false,
-      connectNulls: false,
+      // 仅由图表跨过 null 做视觉连接，原始失败点仍然没有延迟值。
+      connectNulls: true,
       lineStyle: { width: 1.5, color, cap: 'round' as const },
       itemStyle: { color }, // 确保 symbol 颜色一致
       z: 2,
@@ -495,15 +525,11 @@ const pingChartOption = computed(() => {
   })
   const packetLossSeries = {
     name: packetLossSeriesName,
-    type: 'line' as const,
+    type: 'bar' as const,
     data: packetLossData,
     yAxisIndex: 1,
-    smooth: false,
-    showSymbol: false,
-    connectNulls: false,
-    lineStyle: { width: 0, color: packetLossColor },
-    itemStyle: { color: packetLossColor },
-    areaStyle: { color: packetLossColor, opacity: 0.3 },
+    barMaxWidth: 8,
+    itemStyle: { color: packetLossColor, opacity: 0.55, borderRadius: [2, 2, 0, 0] },
     z: 1,
   }
 
@@ -558,7 +584,7 @@ const pingChartOption = computed(() => {
         for (const item of taskRows) {
           const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color};margin-right:8px;flex-shrink:0"></span>`
           const value = item.lost
-            ? '<span style="color:#EF4444">探测失败</span>'
+            ? '<span style="color:#EF4444">探测失败 / 丢包</span>'
             : `${Math.round(item.delay as number)} ms`
           html += `<div style="display:flex;align-items:center">${colorDot}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeTooltipText(item.name)}</span><span style="margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums">${value}</span></div>`
         }
@@ -637,7 +663,6 @@ watch(() => props.uuid, () => {
   tasks.value = []
   resetTaskSelection()
   activeTaskTooltipId.value = null
-  smoothInfoTooltipOpen.value = false
   fetchRecords()
 })
 
@@ -782,33 +807,6 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- 平滑延迟开关 -->
-        <div class="flex flex-wrap gap-4 items-center py-2 justify-between">
-          <TooltipProvider>
-            <div class="flex gap-2 items-center">
-              <Button
-                variant="ghost" size="xs" class="h-7 rounded-sm bg-background/50 hover:bg-background border-none"
-                :class="smoothDelay && 'shadow-[0_0_0_2px] shadow-green-600/10 text-green-600'" @click="smoothDelay = !smoothDelay"
-              >
-                平滑延迟
-              </Button>
-              <Tooltip
-                :open="isTouchTooltipMode ? smoothInfoTooltipOpen : undefined"
-                @update:open="(open) => smoothInfoTooltipOpen = open"
-              >
-                <TooltipTrigger as-child>
-                  <Button variant="ghost" size="icon-xs" class="text-slate-500" @click.stop="toggleSmoothInfoTooltip">
-                    <Icon icon="carbon:information" :width="14" :height="14" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <span>仅平滑连续的有效延迟段，丢包点始终保留断线</span>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          </TooltipProvider>
         </div>
 
         <!-- 图表 -->

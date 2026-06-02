@@ -41,8 +41,6 @@ export interface RecordFormat {
   connections_udp: number | null
 }
 
-type AnyRecord = Record<string, any>
-
 /**
  * 创建空值模板
  * 递归设置所有数值属性为 null，用于填充缺失的时间点
@@ -152,41 +150,4 @@ export function fillMissingTimePoints<T extends { time?: string, updated_at?: st
   })
 
   return filled
-}
-
-/**
- * 使用 EWMA 平滑连续的有效数据段。
- * null/undefined 表示丢包或缺测，必须原样保留，并重置下一段的 EWMA。
- */
-export function smoothValidSegments(
-  data: AnyRecord[],
-  keys: string[],
-  alpha: number = 0.3,
-): AnyRecord[] {
-  if (!data || data.length === 0)
-    return data
-
-  const result: AnyRecord[] = data.map(row => ({ ...row }))
-
-  for (const key of keys) {
-    let ewma: number | null = null
-
-    for (const row of result) {
-      if (!row)
-        continue
-      const currentValue = row[key]
-
-      if (typeof currentValue === 'number' && Number.isFinite(currentValue)) {
-        ewma = ewma === null
-          ? currentValue
-          : alpha * currentValue + (1 - alpha) * ewma
-        row[key] = ewma
-      }
-      else {
-        ewma = null
-      }
-    }
-  }
-
-  return result
 }
