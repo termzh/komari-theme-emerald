@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { computed } from 'vue'
+import { useIntervalFn } from '@vueuse/core'
+import dayjs from 'dayjs'
+import { computed, ref } from 'vue'
 import NodeEarthGlobe from '@/components/NodeEarthGlobe.vue'
 import { CardX } from '@/components/ui/card-x'
 import { useAppStore } from '@/stores/app'
@@ -9,6 +11,17 @@ import { formatBytesPerSecondSplit, formatBytesSplit } from '@/utils/helper'
 
 const appStore = useAppStore()
 const nodesStore = useNodesStore()
+
+const now = ref(dayjs())
+const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+
+useIntervalFn(() => {
+  now.value = dayjs()
+}, 1000)
+
+const currentDate = computed(() => now.value.format('YYYY-MM-DD'))
+const currentTime = computed(() => now.value.format('HH:mm:ss'))
+const currentWeekday = computed(() => weekdays[now.value.day()])
 
 const totalSpeed = computed(() => {
   const onlineNodes = nodesStore.nodes.filter(node => node.online)
@@ -25,44 +38,16 @@ const totalTraffic = computed(() => {
 
 const formattedTrafficUp = computed(() => formatBytesSplit(totalTraffic.value.up, appStore.byteDecimals))
 const formattedTrafficDown = computed(() => formatBytesSplit(totalTraffic.value.down, appStore.byteDecimals))
-
 const formattedSpeedUp = computed(() => formatBytesPerSecondSplit(totalSpeed.value.up, appStore.byteDecimals))
 const formattedSpeedDown = computed(() => formatBytesPerSecondSplit(totalSpeed.value.down, appStore.byteDecimals))
 
-// ==================== 内存 / 硬盘 汇总 ====================
-// 离线节点的 ram / disk 为 0，不影响 used 求和；mem_total / disk_total 是静态库存信息，按全量统计
-const totalMemory = computed(() => {
-  let used = 0
-  let total = 0
-  for (const node of nodesStore.nodes) {
-    used += node.ram || 0
-    total += node.mem_total || 0
-  }
-  return { used, total }
-})
-
-const totalDisk = computed(() => {
-  let used = 0
-  let total = 0
-  for (const node of nodesStore.nodes) {
-    used += node.disk || 0
-    total += node.disk_total || 0
-  }
-  return { used, total }
-})
-
-const formattedMemoryUsed = computed(() => formatBytesSplit(totalMemory.value.used, appStore.byteDecimals))
-const formattedMemoryTotal = computed(() => formatBytesSplit(totalMemory.value.total, appStore.byteDecimals))
-const formattedDiskUsed = computed(() => formatBytesSplit(totalDisk.value.used, appStore.byteDecimals))
-const formattedDiskTotal = computed(() => formatBytesSplit(totalDisk.value.total, appStore.byteDecimals))
-
 const showEarth = computed(() => !appStore.hideEarth)
 const wrapperClass = computed(() => showEarth.value
-  ? 'p-4 grid grid-cols-12 grid-rows-1 gap-2 h-auto md:h-58'
-  : 'p-4 grid grid-cols-1 gap-2 h-auto')
+  ? 'p-4 grid grid-cols-12 gap-2 h-auto md:h-58'
+  : 'p-4')
 const cardGridClass = computed(() => showEarth.value
-  ? 'h-42 -mt-42 md:mt-0 col-span-12 row-start-3 z-9 md:h-auto md:col-span-6 md:row-start-1 grid grid-cols-12 grid-rows-2 gap-2'
-  : 'col-span-1 grid grid-cols-3 md:grid-cols-6 gap-2')
+  ? 'relative z-9 -mt-40 col-span-12 grid grid-cols-2 gap-2 md:col-span-6 md:row-start-1 md:mt-0 md:h-50 md:self-start'
+  : 'grid grid-cols-2 gap-2 lg:grid-cols-4')
 </script>
 
 <template>
@@ -75,137 +60,110 @@ const cardGridClass = computed(() => showEarth.value
     <div :class="cardGridClass">
       <CardX
         hoverable
-        class="group h-full bg-background/50 border-none hover:bg-background backdrop-blur-sm md:backdrop-blur-none transition-all"
-        :class="showEarth ? 'col-span-4 row-span-1 col-start-1 row-start-1' : 'col-span-1 min-h-18 md:min-h-28'"
+        class="group relative min-h-24 overflow-hidden border-none bg-background/65 shadow-[0_0_0_1px] shadow-slate-500/5 backdrop-blur-md transition-all hover:bg-background/85"
         content-class="h-full !p-3"
       >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">内存用量</span>
-            <Icon
-              icon="tabler:cash" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
+        <div class="flex h-full flex-col justify-between gap-3">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-medium tracking-wider text-muted-foreground">当前时间</span>
+            <Icon icon="tabler:calendar-time" :width="18" :height="18" class="text-slate-500/35 transition-colors group-hover:text-green-600" />
           </div>
-          <div class="flex items-baseline gap-1 min-w-0">
-            <span class="text-md md:text-2xl font-bold leading-none tracking-tight">
-              {{ formattedMemoryUsed.value }}
-            </span>
-            <span class="text-[11px] md:text-xs font-medium text-muted-foreground truncate">
-              {{ formattedMemoryUsed.unit }} / {{ formattedMemoryTotal.value }} {{ formattedMemoryTotal.unit }}
-            </span>
-          </div>
-        </div>
-      </CardX>
-      <CardX
-        hoverable
-        class="group h-full bg-background/50 border-none hover:bg-background backdrop-blur-sm md:backdrop-blur-none transition-all"
-        :class="showEarth ? 'col-span-4 row-span-1 col-start-1 row-start-2' : 'col-span-1 min-h-18 md:min-h-28'"
-        content-class="h-full !p-3"
-      >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">硬盘用量</span>
-            <Icon
-              icon="tabler:server-2" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
-          </div>
-          <div class="flex items-baseline gap-1 min-w-0">
-            <span class="text-md md:text-2xl font-bold leading-none tracking-tight">{{ formattedDiskUsed.value }}</span>
-            <span class="text-[11px] md:text-xs font-medium text-muted-foreground truncate">
-              {{ formattedDiskUsed.unit }} / {{ formattedDiskTotal.value }} {{ formattedDiskTotal.unit }}
-            </span>
+          <div class="min-w-0">
+            <div class="text-xl font-bold leading-none tracking-tight tabular-nums md:text-2xl">
+              {{ currentTime }}
+            </div>
+            <div class="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span>{{ currentDate }}</span>
+              <span class="size-1 rounded-full bg-green-600/70" />
+              <span>{{ currentWeekday }}</span>
+            </div>
           </div>
         </div>
       </CardX>
 
       <CardX
         hoverable
-        class="group bg-background/50 border-none hover:bg-background backdrop-blur-sm md:backdrop-blur-none transition-all"
-        :class="showEarth ? 'col-span-4 row-span-1 col-start-5 row-start-1' : 'col-span-1 min-h-18 md:min-h-28'"
+        class="group relative min-h-24 overflow-hidden border-none bg-background/65 shadow-[0_0_0_1px] shadow-slate-500/5 backdrop-blur-md transition-all hover:bg-background/85"
         content-class="h-full !p-3"
       >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">累计上行</span>
-            <Icon
-              icon="tabler:upload" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
+        <div class="flex h-full flex-col justify-between gap-3">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-medium tracking-wider text-muted-foreground">服务器状态</span>
+            <Icon icon="tabler:server-2" :width="18" :height="18" class="text-slate-500/35 transition-colors group-hover:text-green-600" />
           </div>
-          <div class="flex items-baseline gap-1">
-            <span class="text-md md:text-2xl font-bold leading-none tracking-tight">
-              {{ formattedTrafficUp.value }}
-            </span>
-            <span class="text-[11px] md:text-xs font-medium text-muted-foreground">{{ formattedTrafficUp.unit }}</span>
-          </div>
-        </div>
-      </CardX>
-      <CardX
-        hoverable
-        class="group bg-background/50 border-none hover:bg-background backdrop-blur-sm md:backdrop-blur-none transition-all"
-        :class="showEarth ? 'col-span-4 row-span-1 col-start-5 row-start-2' : 'col-span-1 min-h-18 md:min-h-28'"
-        content-class="h-full !p-3"
-      >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">累计下行</span>
-            <Icon
-              icon="tabler:download" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
-          </div>
-          <div class="flex items-baseline gap-1">
-            <span class="text-md md:text-2xl font-bold leading-none tracking-tight">
-              {{ formattedTrafficDown.value }}
-            </span>
-            <span class="text-[11px] md:text-xs font-medium text-muted-foreground">
-              {{ formattedTrafficDown.unit }}
-            </span>
+          <div class="flex items-end justify-between gap-2">
+            <div class="flex items-baseline gap-1">
+              <span class="text-2xl font-bold leading-none tracking-tight text-green-600 tabular-nums">
+                {{ nodesStore.onlineCount }}
+              </span>
+              <span class="text-sm font-semibold text-muted-foreground tabular-nums">/ {{ nodesStore.totalCount }}</span>
+            </div>
+            <div class="mb-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+              <span class="size-1.5 rounded-full bg-green-600 animate-pulse" />
+              在线
+            </div>
           </div>
         </div>
       </CardX>
 
       <CardX
         hoverable
-        class="group bg-background/50 border-none hover:bg-background backdrop-blur-sm md:backdrop-blur-none transition-all"
-        :class="showEarth ? 'col-span-4 row-span-1 col-start-9 row-start-1' : 'col-span-1 min-h-18 md:min-h-28'"
+        class="group relative min-h-24 overflow-hidden border-none bg-background/65 shadow-[0_0_0_1px] shadow-slate-500/5 backdrop-blur-md transition-all hover:bg-background/85"
         content-class="h-full !p-3"
       >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">实时上行</span>
-            <Icon
-              icon="tabler:chevrons-up" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
+        <div class="flex h-full flex-col justify-between gap-2">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-medium tracking-wider text-muted-foreground">累计流量</span>
+            <Icon icon="tabler:arrows-transfer-up-down" :width="18" :height="18" class="text-slate-500/35 transition-colors group-hover:text-green-600" />
           </div>
-          <div class="flex items-baseline gap-1">
-            <span class="text-md md:text-2xl font-bold leading-none tracking-tight">{{ formattedSpeedUp.value }}</span>
-            <span class="text-[11px] md:text-xs font-medium text-muted-foreground">{{ formattedSpeedUp.unit }}</span>
+          <div class="space-y-1.5">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="flex items-center gap-1 text-[11px] text-green-600">
+                <Icon icon="tabler:arrow-up" :width="12" :height="12" /> 上行
+              </span>
+              <span class="truncate text-sm font-bold tracking-tight tabular-nums">
+                {{ formattedTrafficUp.value }} <span class="text-[10px] font-medium text-muted-foreground">{{ formattedTrafficUp.unit }}</span>
+              </span>
+            </div>
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="flex items-center gap-1 text-[11px] text-blue-600">
+                <Icon icon="tabler:arrow-down" :width="12" :height="12" /> 下行
+              </span>
+              <span class="truncate text-sm font-bold tracking-tight tabular-nums">
+                {{ formattedTrafficDown.value }} <span class="text-[10px] font-medium text-muted-foreground">{{ formattedTrafficDown.unit }}</span>
+              </span>
+            </div>
           </div>
         </div>
       </CardX>
+
       <CardX
         hoverable
-        class="group bg-background/50 border-none hover:bg-background backdrop-blur-sm md:backdrop-blur-none transition-all"
-        :class="showEarth ? 'col-span-4 row-span-1 col-start-9 row-start-2' : 'col-span-1 min-h-18 md:min-h-28'"
+        class="group relative min-h-24 overflow-hidden border-none bg-background/65 shadow-[0_0_0_1px] shadow-slate-500/5 backdrop-blur-md transition-all hover:bg-background/85"
         content-class="h-full !p-3"
       >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">实时下行</span>
-            <Icon
-              icon="tabler:chevrons-down" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
+        <div class="flex h-full flex-col justify-between gap-2">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-medium tracking-wider text-muted-foreground">实时速率</span>
+            <Icon icon="tabler:activity" :width="18" :height="18" class="text-slate-500/35 transition-colors group-hover:text-green-600" />
           </div>
-          <div class="flex items-baseline gap-1">
-            <span class="text-md md:text-2xl font-bold leading-none tracking-tight">
-              {{ formattedSpeedDown.value }}
-            </span>
-            <span class="text-[11px] md:text-xs font-medium text-muted-foreground">{{ formattedSpeedDown.unit }}</span>
+          <div class="space-y-1.5">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="flex items-center gap-1 text-[11px] text-green-600">
+                <Icon icon="tabler:arrow-up" :width="12" :height="12" /> 上行
+              </span>
+              <span class="truncate text-sm font-bold tracking-tight tabular-nums">
+                {{ formattedSpeedUp.value }} <span class="text-[10px] font-medium text-muted-foreground">{{ formattedSpeedUp.unit }}</span>
+              </span>
+            </div>
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="flex items-center gap-1 text-[11px] text-blue-600">
+                <Icon icon="tabler:arrow-down" :width="12" :height="12" /> 下行
+              </span>
+              <span class="truncate text-sm font-bold tracking-tight tabular-nums">
+                {{ formattedSpeedDown.value }} <span class="text-[10px] font-medium text-muted-foreground">{{ formattedSpeedDown.unit }}</span>
+              </span>
+            </div>
           </div>
         </div>
       </CardX>

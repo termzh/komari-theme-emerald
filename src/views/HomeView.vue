@@ -19,6 +19,7 @@ defineOptions({ name: 'HomeView' })
 const NodeCard = defineAsyncComponent(() => import('@/components/NodeCard.vue'))
 const NodeGeneralCards = defineAsyncComponent(() => import('@/components/NodeGeneralCards.vue'))
 const NodeList = defineAsyncComponent(() => import('@/components/NodeList.vue'))
+const NodePingDialog = defineAsyncComponent(() => import('@/components/NodePingDialog.vue'))
 
 const appStore = useAppStore()
 const nodesStore = useNodesStore()
@@ -38,6 +39,7 @@ onDeactivated(() => {
 
 const searchText = ref('')
 const debouncedSearchText = ref('')
+const selectedPingNode = ref<typeof nodesStore.nodes[number] | null>(null)
 
 const updateDebouncedSearch = useDebounceFn((value: string) => {
   debouncedSearchText.value = value
@@ -92,6 +94,16 @@ const nodeList = computed(() => {
 
 function handleNodeClick(node: typeof nodesStore.nodes[number]) {
   router.push({ name: 'instance-detail', params: { id: node.uuid } })
+}
+
+function showNodePing(node: typeof nodesStore.nodes[number]) {
+  selectedPingNode.value = node
+}
+
+function handlePingDialogOpen(open: boolean) {
+  if (!open) {
+    selectedPingNode.value = null
+  }
 }
 </script>
 
@@ -167,7 +179,10 @@ function handleNodeClick(node: typeof nodesStore.nodes[number]) {
               v-if="nodeList.length !== 0 && appStore.nodeViewMode === 'card'"
               class="gap-3 grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(300px,1fr))]"
             >
-              <NodeCard v-for="node in nodeList" :key="node.uuid" :node="node" @click="handleNodeClick(node)" />
+              <NodeCard
+                v-for="node in nodeList" :key="node.uuid" :node="node"
+                @click="handleNodeClick(node)" @show-ping="showNodePing(node)"
+              />
             </div>
             <NodeList
               v-else-if="nodeList.length !== 0 && appStore.nodeViewMode === 'list'" :nodes="nodeList"
@@ -180,5 +195,9 @@ function handleNodeClick(node: typeof nodesStore.nodes[number]) {
         </Tabs>
       </div>
     </div>
+    <NodePingDialog
+      v-if="selectedPingNode" :open="true" :node="selectedPingNode"
+      @update:open="handlePingDialogOpen"
+    />
   </div>
 </template>

@@ -3,19 +3,25 @@ import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { ProgressThin } from '@/components/ui/progress-thin'
-import { useNodePingDisplay } from '@/composables/useNodePingDisplay'
 import { useAppStore } from '@/stores/app'
-import { formatBytesPerSecondWithConfig, formatBytesWithConfig, formatDateTime, formatUptimeWithFormat, getStatus } from '@/utils/helper'
+import { formatBytesPerSecondWithConfig, formatBytesSplit, formatBytesWithConfig, formatDateTime, formatUptimeWithFormat, getStatus } from '@/utils/helper'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getRegionCode, getRegionDisplayName } from '@/utils/regionHelper'
 import { formatPriceWithCycle, getDaysUntilExpired, getExpireStatus, parseTags } from '@/utils/tagHelper'
 
 const props = defineProps<{ node: NodeData }>()
-
-const emit = defineEmits<{ click: [] }>()
+const emit = defineEmits<{
+  click: []
+  showPing: []
+}>()
+const CPU_TRADEMARK_REGEX = /\((?:R|TM)\)/gi
+const CPU_SUFFIX_REGEX = /\s+CPU(?=\s|$)/gi
+const PROCESSOR_SUFFIX_REGEX = /\s+Processor$/i
+const WHITESPACE_REGEX = /\s+/g
 
 const appStore = useAppStore()
 
@@ -25,19 +31,36 @@ const formatUptime = (seconds: number) => formatUptimeWithFormat(seconds, 'hour'
 const offlineTime = computed(() => formatDateTime(props.node.time))
 
 const cpuStatus = computed(() => getStatus(props.node.cpu ?? 0))
+const cpuNameLabel = computed(() => props.node.cpu_name?.trim() || 'CPU 型号未知')
+const cpuDisplayName = computed(() => cpuNameLabel.value
+  .replace(CPU_TRADEMARK_REGEX, '')
+  .replace(CPU_SUFFIX_REGEX, '')
+  .replace(PROCESSOR_SUFFIX_REGEX, '')
+  .replace(WHITESPACE_REGEX, ' ')
+  .trim())
+const cpuLoadAverage = computed(() => [props.node.load, props.node.load5, props.node.load15]
+  .map(value => (value ?? 0).toFixed(2))
+  .join(' / '))
 const memPercentage = computed(() => (props.node.ram ?? 0) / (props.node.mem_total || 1) * 100)
 const memStatus = computed(() => getStatus(memPercentage.value))
 const diskPercentage = computed(() => (props.node.disk ?? 0) / (props.node.disk_total || 1) * 100)
 const diskStatus = computed(() => getStatus(diskPercentage.value))
 
-const {
-  latencyRenderBars,
-  lossRenderBars,
-  latencyDisplay,
-  lossDisplay,
-  latencyPanelTooltip,
-  lossPanelTooltip,
-} = useNodePingDisplay(() => props.node.uuid)
+function formatCompactBytes(bytes: number): string {
+  const { value, unit } = formatBytesSplit(bytes, appStore.byteDecimals)
+  return `${value}${unit.replace('B', '') || 'B'}`
+}
+
+const machineSummary = computed(() => {
+  const cpuCores = props.node.cpu_cores > 0 ? props.node.cpu_cores : '?'
+  return `${cpuCores}C · ${formatCompactBytes(props.node.mem_total ?? 0)} · ${formatCompactBytes(props.node.disk_total ?? 0)}`
+})
+
+const machineDetails = computed(() => [
+  `CPU：${props.node.cpu_cores > 0 ? `${props.node.cpu_cores} 核` : '核心数未知'} · ${cpuNameLabel.value}`,
+  `内存：${formatBytes(props.node.mem_total ?? 0)}`,
+  `硬盘：${formatBytes(props.node.disk_total ?? 0)}`,
+].join('；'))
 
 function showTrafficProgress(node: NodeData): boolean {
   return node.traffic_limit > 0
@@ -77,22 +100,47 @@ const trafficUsed = computed(() => {
   }
 })
 
-const priceTags = computed(() => {
-  const tags: Array<string> = []
+const subscriptionInfo = computed(() => {
   const lang = appStore.lang
   const node = props.node
-  if (node.price !== 0) {
-    const days = getDaysUntilExpired(node.expired_at)
-    const status = getExpireStatus(node.expired_at)
-    if (status === 'expired')
-      tags.push(lang === 'zh-CN' ? '已过期' : 'Expired')
-    else if (status === 'long_term')
-      tags.push(lang === 'zh-CN' ? '长期' : 'Long-term')
-    else tags.push(lang === 'zh-CN' ? `剩余 ${days} 天` : `${days} days left`)
-    const priceText = formatPriceWithCycle(node.price, node.billing_cycle, node.currency, lang)
-    tags.push(priceText)
+  if (node.price === 0)
+    return null
+
+  const days = getDaysUntilExpired(node.expired_at)
+  const status = getExpireStatus(node.expired_at)
+  const expireText = status === 'expired'
+    ? (lang === 'zh-CN' ? '已过期' : 'Expired')
+    : status === 'long_term'
+      ? (lang === 'zh-CN' ? '长期有效' : 'Long-term')
+      : (lang === 'zh-CN' ? `剩余 ${days} 天` : `${days} days left`)
+
+  return {
+    status,
+    expireText,
+    expireLabel: lang === 'zh-CN' ? '到期' : 'Expires',
+    expireDateText: formatDateTime(node.expired_at, 'YYYY-MM-DD'),
+    priceText: formatPriceWithCycle(node.price, node.billing_cycle, node.currency, lang),
   }
-  return tags
+})
+
+const subscriptionToneClass = computed(() => {
+  switch (subscriptionInfo.value?.status) {
+    case 'expired':
+    case 'critical': return 'bg-red-500/[0.065] ring-red-500/15'
+    case 'warning': return 'bg-amber-500/[0.065] ring-amber-500/20'
+    case 'normal': return 'bg-green-600/[0.055] ring-green-600/10'
+    default: return 'bg-slate-500/[0.055] ring-slate-500/10'
+  }
+})
+
+const subscriptionStatusClass = computed(() => {
+  switch (subscriptionInfo.value?.status) {
+    case 'expired':
+    case 'critical': return 'text-red-600'
+    case 'warning': return 'text-amber-600'
+    case 'normal': return 'text-green-600'
+    default: return 'text-muted-foreground'
+  }
 })
 
 const customTags = computed(() => parseTags(props.node.tags).map(t => t.text))
@@ -105,7 +153,10 @@ function hasRegion(region: string | null | undefined): boolean {
 <template>
   <CardX
     hoverable
-    class="node-card w-full cursor-pointer bg-background/50 border-none shadow-[0_0_0_3px] shadow-transparent hover:bg-background hover:shadow-green-600/10 backdrop-blur-sm transition-all duration-200 rounded-md"
+    :segmented="{ content: true }"
+    header-class="bg-slate-500/[0.025]"
+    content-class="!pt-3"
+    class="node-card w-full cursor-pointer border-none bg-background/75 shadow-[0_0_0_1px] shadow-slate-500/15 backdrop-blur-md transition-all duration-200 hover:bg-background/95 hover:shadow-[0_0_0_2px] hover:shadow-green-600/15 rounded-md"
     :class="[!props.node.online && '!shadow-red-600/20']" @click="emit('click')"
   >
     <template #header>
@@ -127,6 +178,13 @@ function hasRegion(region: string | null | undefined): boolean {
 
     <template #header-extra>
       <div class="flex gap-2 items-center">
+        <Button
+          type="button" variant="ghost" size="icon-sm" aria-label="查看延迟图表" title="延迟监控"
+          class="size-7 rounded-sm bg-slate-500/8 text-muted-foreground ring-1 ring-inset ring-slate-500/10 hover:bg-green-600/10 hover:text-green-600 hover:ring-green-600/20"
+          @click.stop="emit('showPing')"
+        >
+          <Icon icon="tabler:chart-line" :width="18" :height="18" />
+        </Button>
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
           v-if="hasRegion(props.node.region)" :src="`/images/flags/${getRegionCode(props.node.region)}.svg`"
@@ -136,67 +194,60 @@ function hasRegion(region: string | null | undefined): boolean {
     </template>
 
     <template #default>
-      <div class="flex flex-col gap-3 -mt-4">
-        <div class="gap-3 grid grid-cols-2">
-          <!-- <div class="flex flex-col gap-1 col-span-2">
-                <div class="flex gap-2 items-center">
-                  <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
-                  <span class="text-xs">{{ getOSName(props.node.os) }}</span>
-                </div>
-              </div> -->
+      <div class="flex flex-col gap-2.5">
+        <div class="gap-2 grid grid-cols-2">
           <!-- CPU -->
-          <div class="flex flex-col gap-1">
+          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
             <div class="w-full text-xs flex flex-row justify-between">
-              <span class="text-muted-foreground">
-                CPU
+              <span class="font-medium text-muted-foreground">
+                CPU 占用
               </span>
-              <span>{{ (props.node.cpu ?? 0).toFixed(1) }}%</span>
+              <span class="font-semibold tabular-nums">{{ (props.node.cpu ?? 0).toFixed(1) }}%</span>
             </div>
-            <ProgressThin :percentage="props.node.cpu ?? 0" :status="cpuStatus" :height="4" />
-            <div class="text-[11px] text-muted-foreground truncate">
-              {{ props.node.load.toFixed(2) ?? 0 }}, {{ props.node.load5.toFixed(2) ?? 0 }}, {{
-                props.node.load15.toFixed(2) ?? 0 }}
+            <ProgressThin :percentage="props.node.cpu ?? 0" :status="cpuStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+            <div class="text-[11px] text-muted-foreground truncate tabular-nums" title="1 / 5 / 15 分钟平均负载">
+              负载 {{ cpuLoadAverage }}
             </div>
           </div>
 
           <!-- 内存 -->
-          <div class="flex flex-col gap-1">
+          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
             <div class="w-full text-xs flex flex-row justify-between">
-              <span class="text-muted-foreground">
+              <span class="font-medium text-muted-foreground">
                 内存
               </span>
-              <span>{{ memPercentage.toFixed(1) }}%</span>
+              <span class="font-semibold tabular-nums">{{ memPercentage.toFixed(1) }}%</span>
             </div>
-            <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" />
-            <div class="text-[11px] text-muted-foreground truncate">
+            <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+            <div class="text-[11px] text-muted-foreground truncate tabular-nums">
               {{ formatBytes(props.node.ram ?? 0) }} / {{ formatBytes(props.node.mem_total ?? 0) }}
             </div>
           </div>
 
           <!-- 硬盘 -->
-          <div class="flex flex-col gap-1">
+          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
             <div class="w-full text-xs flex flex-row justify-between">
-              <span class="text-muted-foreground">
+              <span class="font-medium text-muted-foreground">
                 硬盘
               </span>
-              <span>{{ diskPercentage.toFixed(1) }}%</span>
+              <span class="font-semibold tabular-nums">{{ diskPercentage.toFixed(1) }}%</span>
             </div>
-            <ProgressThin :percentage="diskPercentage" :status="diskStatus" :height="4" />
-            <div class="text-[11px] text-muted-foreground truncate">
+            <ProgressThin :percentage="diskPercentage" :status="diskStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+            <div class="text-[11px] text-muted-foreground truncate tabular-nums">
               {{ formatBytes(props.node.disk ?? 0) }} / {{ formatBytes(props.node.disk_total ?? 0) }}
             </div>
           </div>
 
           <!-- 流量进度条 -->
-          <div class="flex flex-col gap-1">
+          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
             <div class="w-full text-xs flex flex-row justify-between">
-              <span class="text-muted-foreground">
+              <span class="font-medium text-muted-foreground">
                 流量
               </span>
-              <span>{{ trafficUsedPercentage.toFixed(1) }}%</span>
+              <span class="font-semibold tabular-nums">{{ trafficUsedPercentage.toFixed(1) }}%</span>
             </div>
-            <ProgressThin :percentage="trafficUsedPercentage" status="success" :height="4" />
-            <div class="text-[11px] text-muted-foreground truncate">
+            <ProgressThin :percentage="trafficUsedPercentage" status="success" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+            <div class="text-[11px] text-muted-foreground truncate tabular-nums">
               {{ formatBytes(trafficUsed) }} /
               <template v-if="showTrafficProgress(node)">
                 {{ formatBytes(props.node.traffic_limit) }}
@@ -207,7 +258,22 @@ function hasRegion(region: string | null | undefined): boolean {
             </div>
           </div>
         </div>
-        <div class="gap-1.5 grid grid-cols-6 relative">
+        <div
+          class="flex min-w-0 flex-col gap-1 rounded-md bg-green-600/[0.055] px-2 py-1.5 text-[11px] ring-1 ring-inset ring-green-600/10"
+          :title="machineDetails"
+        >
+          <div class="flex min-w-0 items-center gap-1.5">
+            <Icon icon="tabler:server-cog" :width="14" :height="14" class="shrink-0 text-green-600" />
+            <span class="shrink-0 font-medium text-muted-foreground">整机配置</span>
+            <span class="text-muted-foreground">·</span>
+            <span class="truncate font-semibold tabular-nums">{{ machineSummary }}</span>
+          </div>
+          <div class="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
+            <Icon icon="tabler:cpu" :width="12" :height="12" class="shrink-0" />
+            <span class="truncate">{{ cpuDisplayName }}</span>
+          </div>
+        </div>
+        <div class="gap-1.5 grid grid-cols-2 relative">
           <div
             v-if="!props.node.online"
             class="absolute inset-0 flex flex-col gap-1 items-center justify-center z-1 text-center" aria-hidden="true"
@@ -220,10 +286,13 @@ function hasRegion(region: string | null | undefined): boolean {
             </div>
           </div>
           <div
-            class="flex flex-col gap-0.5 p-1 pl-2 rounded-sm bg-slate-500/5"
-            :class="[priceTags.length ? 'col-span-2' : 'col-span-3', !props.node.online ? 'blur-xs opacity-60' : '']"
+            class="flex flex-col gap-0.5 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10"
+            :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
           >
-            <div class="text-[11px] flex flex-col">
+            <div class="text-[10px] font-medium tracking-wide text-muted-foreground">
+              实时速率
+            </div>
+            <div class="text-[11px] flex flex-col tabular-nums">
               <div class="text-green-600 flex flex-row items-center gap-1">
                 <Icon icon="tabler:chevron-up" width="12" height="12" />
                 {{ formatBytesPerSecond(props.node.net_out ?? 0) }}
@@ -235,10 +304,13 @@ function hasRegion(region: string | null | undefined): boolean {
             </div>
           </div>
           <div
-            class="flex flex-col gap-0.5 p-1 pl-2 rounded-sm bg-slate-500/5"
-            :class="[priceTags.length ? 'col-span-2' : 'col-span-3', !props.node.online ? 'blur-xs opacity-60' : '']"
+            class="flex flex-col gap-0.5 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10"
+            :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
           >
-            <div class="text-[11px] text-muted-foreground flex flex-col">
+            <div class="text-[10px] font-medium tracking-wide text-muted-foreground">
+              累计流量
+            </div>
+            <div class="text-[11px] text-muted-foreground flex flex-col tabular-nums">
               <div class="flex flex-row items-center gap-1">
                 <Icon icon="tabler:upload" width="12" height="12" />
                 {{ formatBytes(props.node.net_total_up ?? 0) }}
@@ -249,72 +321,30 @@ function hasRegion(region: string | null | undefined): boolean {
               </div>
             </div>
           </div>
-          <div
-            v-if="priceTags.length" class="col-span-2 flex flex-col gap-0.5 p-1 pl-2 rounded-sm bg-slate-500/5"
-            :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
-          >
-            <div class="text-[11px] text-muted-foreground flex flex-col">
-              <div v-for="(tag, index) in priceTags" :key="index" class="flex flex-row items-center gap-1">
-                {{ tag }}
-              </div>
+        </div>
+        <div
+          v-if="subscriptionInfo"
+          class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
+          :class="[subscriptionToneClass, !props.node.online ? 'blur-xs opacity-60' : '']"
+          :title="`${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText}`"
+        >
+          <div class="flex min-w-0 flex-col gap-0.5">
+            <div class="flex min-w-0 items-center gap-1.5">
+              <Icon icon="tabler:calendar-dollar" :width="14" :height="14" class="shrink-0 text-muted-foreground" />
+              <span class="shrink-0 font-medium text-muted-foreground">订阅</span>
+              <span class="text-muted-foreground">·</span>
+              <span class="truncate font-medium" :class="subscriptionStatusClass">{{ subscriptionInfo.expireText }}</span>
+            </div>
+            <div class="pl-5 text-[10px] text-muted-foreground tabular-nums">
+              {{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}
             </div>
           </div>
-          <!-- 运行时长 -->
-          <!-- <div
-            class="col-span-6 flex flex-row gap-2 items-center p-1 rounded-sm bg-slate-500/5 justify-center text-[11px] text-muted-foreground"
-            :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
-          >
-            <span class="inline-flex flex-row gap-1 items-center">
-              {{ formatUptime(props.node.uptime ?? 0) }}
-            </span>
-          </div> -->
-          <!-- 延迟 -->
-          <div
-            class="group/panel relative col-span-3 flex flex-col gap-1.5 p-1.5 h-10 rounded-sm bg-slate-500/5"
-            :class="[!props.node.online ? 'blur-xs opacity-60' : '']" :title="latencyPanelTooltip"
-          >
-            <div class="flex items-center justify-between gap-2 text-[11px] leading-none relative">
-              <span class="text-muted-foreground">延迟</span>
-              <span class="font-medium text-foreground/85">{{ latencyDisplay }}</span>
-            </div>
-            <div
-              class="grid h-full items-end gap-[1px] opacity-80 group-hover/panel:opacity-100 cursor-auto"
-              :style="{ gridTemplateColumns: `repeat(${latencyRenderBars.length}, minmax(0, 1fr))` }"
-            >
-              <DataTooltip v-for="bar in latencyRenderBars" :key="bar.key" placement="top" :content="bar.tooltip" class="h-full w-full">
-                <span
-                  class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-160 group-hover/panel:opacity-60 group-hover/data-tooltip:!opacity-100"
-                  :class="bar.className"
-                />
-              </DataTooltip>
-            </div>
-          </div>
-          <!-- 丢包 -->
-          <div
-            class="group/panel relative col-span-3 flex flex-col gap-1.5 p-1.5 h-10 rounded-sm bg-slate-500/5"
-            :class="[!props.node.online ? 'blur-xs opacity-60' : '']" :title="lossPanelTooltip"
-          >
-            <div class="flex items-center justify-between gap-2 text-[11px] leading-none">
-              <span class="text-muted-foreground">丢包</span>
-              <span class="font-medium text-foreground/85">{{ lossDisplay }}</span>
-            </div>
-            <div
-              class="grid h-full items-end gap-[1px] opacity-80 group-hover/panel:opacity-100 cursor-auto"
-              :style="{ gridTemplateColumns: `repeat(${lossRenderBars.length}, minmax(0, 1fr))` }"
-            >
-              <DataTooltip v-for="bar in lossRenderBars" :key="bar.key" placement="top" :content="bar.tooltip" class="h-full w-full">
-                <span
-                  class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-160 group-hover/panel:opacity-60 group-hover/data-tooltip:!opacity-100"
-                  :class="bar.className"
-                />
-              </DataTooltip>
-            </div>
-          </div>
+          <span class="shrink-0 font-semibold tabular-nums">{{ subscriptionInfo.priceText }}</span>
         </div>
         <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1 items-center">
           <Badge
             v-for="(tag, index) in customTags" :key="index" variant="outline"
-            class="!text-[11px] rounded text-muted-foreground border-muted-foreground/10 px-1.5"
+            class="!text-[11px] rounded border-muted-foreground/20 bg-background/45 px-1.5 text-muted-foreground"
           >
             {{ tag }}
           </Badge>
@@ -328,36 +358,5 @@ function hasRegion(region: string | null | undefined): boolean {
 .node-card {
   position: relative;
   overflow: hidden;
-}
-
-.node-offline-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  pointer-events: none;
-  border-radius: inherit;
-  background-color: var(--card);
-  transition: opacity 200ms ease;
-}
-
-.node-card:hover .node-offline-overlay {
-  opacity: 0;
-}
-
-.node-offline-overlay__content {
-  display: flex;
-  max-width: 100%;
-  flex-direction: column;
-  gap: 6px;
-  align-items: center;
-}
-
-.node-offline-overlay__header,
-.node-offline-overlay__tags {
-  max-width: 100%;
 }
 </style>

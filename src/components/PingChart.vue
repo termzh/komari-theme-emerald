@@ -141,6 +141,7 @@ const error = ref<string | null>(null)
 
 // 任务选择
 const selectedTaskIds = ref<number[]>([])
+const isDefaultAllTasks = ref(true)
 const cutPeak = ref(false)
 const isTouchTooltipMode = ref(false)
 const activeTaskTooltipId = ref<number | null>(null)
@@ -204,8 +205,12 @@ async function fetchRecords() {
     remoteData.value = records
     tasks.value = result?.tasks || []
 
-    if (tasks.value.length > 0 && selectedTaskIds.value.length === 0) {
+    if (isDefaultAllTasks.value) {
       selectedTaskIds.value = tasks.value.map(t => t.id)
+    }
+    else {
+      const availableTaskIds = new Set(tasks.value.map(t => t.id))
+      selectedTaskIds.value = selectedTaskIds.value.filter(id => availableTaskIds.has(id))
     }
   }
   catch (err) {
@@ -370,8 +375,19 @@ const selectedTasks = computed(() => {
 
 // 切换任务选中状态
 function toggleTask(taskId: number) {
+  if (isDefaultAllTasks.value) {
+    isDefaultAllTasks.value = false
+    selectedTaskIds.value = [taskId]
+    return
+  }
+
   if (selectedTaskIds.value.includes(taskId)) {
-    selectedTaskIds.value = selectedTaskIds.value.filter(id => id !== taskId)
+    const nextTaskIds = selectedTaskIds.value.filter(id => id !== taskId)
+    if (nextTaskIds.length === 0) {
+      showAllTasks()
+      return
+    }
+    selectedTaskIds.value = nextTaskIds
   }
   else {
     selectedTaskIds.value = [...selectedTaskIds.value, taskId]
@@ -379,10 +395,12 @@ function toggleTask(taskId: number) {
 }
 
 function showAllTasks() {
+  isDefaultAllTasks.value = true
   selectedTaskIds.value = tasks.value.map(t => t.id)
 }
 
-function hideAllTasks() {
+function resetTaskSelection() {
+  isDefaultAllTasks.value = true
   selectedTaskIds.value = []
 }
 
@@ -533,14 +551,14 @@ const pingChartOption = computed(() => {
 // ==================== 生命周期 ====================
 
 watch(selectedView, () => {
-  selectedTaskIds.value = []
+  resetTaskSelection()
   fetchRecords()
 })
 
 watch(() => props.uuid, () => {
   remoteData.value = []
   tasks.value = []
-  selectedTaskIds.value = []
+  resetTaskSelection()
   activeTaskTooltipId.value = null
   smoothInfoTooltipOpen.value = false
   fetchRecords()
@@ -585,13 +603,6 @@ onBeforeUnmount(() => {
           @click="showAllTasks"
         >
           全选
-        </Button>
-        <Button
-          variant="ghost" size="xs" class="h-7 rounded-sm bg-background/50 hover:bg-background border-none"
-          :class="!selectedTaskIds.length && 'shadow-[0_0_0_2px] shadow-green-600/10 text-green-600'"
-          @click="hideAllTasks"
-        >
-          全不选
         </Button>
       </div>
     </Tabs>
