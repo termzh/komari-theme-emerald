@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -24,6 +24,7 @@ const PROCESSOR_SUFFIX_REGEX = /\s+Processor$/i
 const WHITESPACE_REGEX = /\s+/g
 
 const appStore = useAppStore()
+const isExpanded = ref(false)
 
 const formatBytes = (bytes: number) => formatBytesWithConfig(bytes, appStore.byteDecimals)
 const formatBytesPerSecond = (bytes: number) => formatBytesPerSecondWithConfig(bytes, appStore.byteDecimals)
@@ -194,160 +195,252 @@ function hasRegion(region: string | null | undefined): boolean {
     </template>
 
     <template #default>
-      <div class="flex flex-col gap-2.5">
-        <div class="gap-2 grid grid-cols-2">
-          <!-- CPU -->
-          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
-            <div class="w-full text-xs flex flex-row justify-between">
-              <span class="font-medium text-muted-foreground">
-                CPU 占用
-              </span>
-              <span class="font-semibold tabular-nums">{{ (props.node.cpu ?? 0).toFixed(1) }}%</span>
-            </div>
-            <ProgressThin :percentage="props.node.cpu ?? 0" :status="cpuStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
-            <div class="text-[11px] text-muted-foreground truncate tabular-nums" title="1 / 5 / 15 分钟平均负载">
-              负载 {{ cpuLoadAverage }}
-            </div>
-          </div>
-
-          <!-- 内存 -->
-          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
-            <div class="w-full text-xs flex flex-row justify-between">
-              <span class="font-medium text-muted-foreground">
-                内存
-              </span>
-              <span class="font-semibold tabular-nums">{{ memPercentage.toFixed(1) }}%</span>
-            </div>
-            <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
-            <div class="text-[11px] text-muted-foreground truncate tabular-nums">
-              {{ formatBytes(props.node.ram ?? 0) }} / {{ formatBytes(props.node.mem_total ?? 0) }}
-            </div>
-          </div>
-
-          <!-- 硬盘 -->
-          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
-            <div class="w-full text-xs flex flex-row justify-between">
-              <span class="font-medium text-muted-foreground">
-                硬盘
-              </span>
-              <span class="font-semibold tabular-nums">{{ diskPercentage.toFixed(1) }}%</span>
-            </div>
-            <ProgressThin :percentage="diskPercentage" :status="diskStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
-            <div class="text-[11px] text-muted-foreground truncate tabular-nums">
-              {{ formatBytes(props.node.disk ?? 0) }} / {{ formatBytes(props.node.disk_total ?? 0) }}
-            </div>
-          </div>
-
-          <!-- 流量进度条 -->
-          <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
-            <div class="w-full text-xs flex flex-row justify-between">
-              <span class="font-medium text-muted-foreground">
-                流量
-              </span>
-              <span class="font-semibold tabular-nums">{{ trafficUsedPercentage.toFixed(1) }}%</span>
-            </div>
-            <ProgressThin :percentage="trafficUsedPercentage" status="success" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
-            <div class="text-[11px] text-muted-foreground truncate tabular-nums">
-              {{ formatBytes(trafficUsed) }} /
-              <template v-if="showTrafficProgress(node)">
-                {{ formatBytes(props.node.traffic_limit) }}
-              </template>
-              <template v-else>
-                ∞
-              </template>
-            </div>
-          </div>
-        </div>
+      <div class="flex flex-col gap-2">
+        <!-- 折叠态摘要：默认保持紧凑，但保留最常用的信息。 -->
         <div
-          class="flex min-w-0 flex-col gap-1 rounded-md bg-green-600/[0.055] px-2 py-1.5 text-[11px] ring-1 ring-inset ring-green-600/10"
+          class="flex min-w-0 flex-col gap-1 rounded-md bg-gradient-to-br from-green-600/[0.085] to-green-600/[0.025] px-2.5 py-2 text-[11px] ring-1 ring-inset ring-green-600/15"
           :title="machineDetails"
         >
           <div class="flex min-w-0 items-center gap-1.5">
             <Icon icon="tabler:server-cog" :width="14" :height="14" class="shrink-0 text-green-600" />
-            <span class="shrink-0 font-medium text-muted-foreground">整机配置</span>
-            <span class="text-muted-foreground">·</span>
-            <span class="truncate font-semibold tabular-nums">{{ machineSummary }}</span>
+            <span class="shrink-0 font-medium text-green-700 dark:text-green-500">整机配置</span>
+            <span class="text-green-700/45 dark:text-green-400/45">·</span>
+            <span class="truncate font-semibold tabular-nums text-foreground/90">{{ machineSummary }}</span>
           </div>
           <div class="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
             <Icon icon="tabler:cpu" :width="12" :height="12" class="shrink-0" />
             <span class="truncate">{{ cpuDisplayName }}</span>
           </div>
         </div>
-        <div class="gap-1.5 grid grid-cols-2 relative">
-          <div
-            v-if="!props.node.online"
-            class="absolute inset-0 flex flex-col gap-1 items-center justify-center z-1 text-center" aria-hidden="true"
-          >
-            <div class="text-sm font-medium text-destructive">
-              离线
+
+        <div class="grid grid-cols-3 gap-1.5">
+          <div class="rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
+            <div class="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+              <Icon icon="tabler:cpu" :width="12" :height="12" class="text-green-600" />
+              CPU
             </div>
-            <div class="text-xs text-muted-foreground">
-              {{ offlineTime }}
-            </div>
-          </div>
-          <div
-            class="flex flex-col gap-0.5 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10"
-            :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
-          >
-            <div class="text-[10px] font-medium tracking-wide text-muted-foreground">
-              实时速率
-            </div>
-            <div class="text-[11px] flex flex-col tabular-nums">
-              <div class="text-green-600 flex flex-row items-center gap-1">
-                <Icon icon="tabler:chevron-up" width="12" height="12" />
-                {{ formatBytesPerSecond(props.node.net_out ?? 0) }}
-              </div>
-              <div class="text-blue-600 flex flex-row items-center gap-1">
-                <Icon icon="tabler:chevron-down" width="12" height="12" />
-                {{ formatBytesPerSecond(props.node.net_in ?? 0) }}
-              </div>
+            <div class="mt-0.5 text-xs font-semibold tabular-nums">
+              {{ (props.node.cpu ?? 0).toFixed(1) }}%
             </div>
           </div>
-          <div
-            class="flex flex-col gap-0.5 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10"
-            :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
-          >
-            <div class="text-[10px] font-medium tracking-wide text-muted-foreground">
-              累计流量
+          <div class="rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
+            <div class="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+              <Icon icon="tabler:device-desktop-analytics" :width="12" :height="12" class="text-blue-600" />
+              内存
             </div>
-            <div class="text-[11px] text-muted-foreground flex flex-col tabular-nums">
-              <div class="flex flex-row items-center gap-1">
-                <Icon icon="tabler:upload" width="12" height="12" />
-                {{ formatBytes(props.node.net_total_up ?? 0) }}
-              </div>
-              <div class="flex flex-row items-center gap-1">
-                <Icon icon="tabler:download" width="12" height="12" />
-                {{ formatBytes(props.node.net_total_down ?? 0) }}
-              </div>
+            <div class="mt-0.5 text-xs font-semibold tabular-nums">
+              {{ memPercentage.toFixed(1) }}%
+            </div>
+          </div>
+          <div class="rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
+            <div class="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+              <Icon icon="tabler:database" :width="12" :height="12" class="text-amber-600" />
+              硬盘
+            </div>
+            <div class="mt-0.5 text-xs font-semibold tabular-nums">
+              {{ diskPercentage.toFixed(1) }}%
             </div>
           </div>
         </div>
+
+        <div
+          class="flex min-w-0 items-center justify-between gap-2 rounded-md bg-slate-500/[0.055] px-2 py-1.5 text-[11px] ring-1 ring-inset ring-slate-500/10"
+        >
+          <div class="flex min-w-0 items-center gap-1.5">
+            <Icon
+              :icon="props.node.online ? 'tabler:activity-heartbeat' : 'tabler:cloud-off'"
+              :width="14" :height="14" class="shrink-0" :class="props.node.online ? 'text-green-600' : 'text-red-600'"
+            />
+            <span class="shrink-0 font-medium text-muted-foreground">{{ props.node.online ? '实时网络' : '节点离线' }}</span>
+          </div>
+          <div v-if="props.node.online" class="flex shrink-0 items-center gap-2 tabular-nums">
+            <span class="flex items-center gap-0.5 text-green-600">
+              <Icon icon="tabler:chevron-up" width="12" height="12" />
+              {{ formatBytesPerSecond(props.node.net_out ?? 0) }}
+            </span>
+            <span class="flex items-center gap-0.5 text-blue-600">
+              <Icon icon="tabler:chevron-down" width="12" height="12" />
+              {{ formatBytesPerSecond(props.node.net_in ?? 0) }}
+            </span>
+          </div>
+          <span v-else class="truncate text-[10px] text-red-600/85 tabular-nums">{{ offlineTime }}</span>
+        </div>
+
         <div
           v-if="subscriptionInfo"
           class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
-          :class="[subscriptionToneClass, !props.node.online ? 'blur-xs opacity-60' : '']"
+          :class="subscriptionToneClass"
           :title="`${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText}`"
         >
-          <div class="flex min-w-0 flex-col gap-0.5">
-            <div class="flex min-w-0 items-center gap-1.5">
-              <Icon icon="tabler:calendar-dollar" :width="14" :height="14" class="shrink-0 text-muted-foreground" />
-              <span class="shrink-0 font-medium text-muted-foreground">订阅</span>
-              <span class="text-muted-foreground">·</span>
-              <span class="truncate font-medium" :class="subscriptionStatusClass">{{ subscriptionInfo.expireText }}</span>
-            </div>
-            <div class="pl-5 text-[10px] text-muted-foreground tabular-nums">
-              {{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}
+          <div class="flex min-w-0 items-center gap-1.5">
+            <Icon icon="tabler:calendar-dollar" :width="14" :height="14" class="shrink-0 text-muted-foreground" />
+            <span class="truncate font-medium" :class="subscriptionStatusClass">{{ subscriptionInfo.expireText }}</span>
+          </div>
+          <span class="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+            {{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}
+          </span>
+        </div>
+
+        <Button
+          type="button" variant="ghost" size="xs" :aria-expanded="isExpanded"
+          :aria-label="isExpanded ? '收起节点详情' : '展开节点详情'"
+          class="h-7 w-full gap-1.5 rounded-sm bg-slate-500/[0.045] text-[11px] text-muted-foreground ring-1 ring-inset ring-slate-500/10 hover:bg-green-600/[0.07] hover:text-green-700 hover:ring-green-600/15 dark:hover:text-green-500"
+          @click.stop="isExpanded = !isExpanded"
+        >
+          <span>{{ isExpanded ? '收起详情' : '展开详情' }}</span>
+          <Icon
+            icon="tabler:chevron-down" :width="14" :height="14"
+            class="transition-transform duration-300" :class="isExpanded && 'rotate-180'"
+          />
+        </Button>
+
+        <div class="node-card-details" :class="isExpanded && 'node-card-details--open'" :aria-hidden="!isExpanded">
+          <div class="min-h-0 overflow-hidden">
+            <div class="flex flex-col gap-2.5 border-t border-slate-500/10 pt-2.5">
+              <div class="flex items-center justify-between px-0.5">
+                <div class="flex items-center gap-1.5 text-[11px] font-semibold text-foreground/80">
+                  <Icon icon="tabler:adjustments-horizontal" :width="14" :height="14" class="text-green-600" />
+                  资源明细
+                </div>
+                <span class="text-[10px] text-muted-foreground">点击卡片进入节点详情</span>
+              </div>
+
+              <div class="gap-2 grid grid-cols-2">
+                <!-- CPU -->
+                <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
+                  <div class="w-full text-xs flex flex-row justify-between">
+                    <span class="font-medium text-muted-foreground">CPU 占用</span>
+                    <span class="font-semibold tabular-nums">{{ (props.node.cpu ?? 0).toFixed(1) }}%</span>
+                  </div>
+                  <ProgressThin :percentage="props.node.cpu ?? 0" :status="cpuStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+                  <div class="text-[11px] text-muted-foreground truncate tabular-nums" title="1 / 5 / 15 分钟平均负载">
+                    负载 {{ cpuLoadAverage }}
+                  </div>
+                </div>
+
+                <!-- 内存 -->
+                <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
+                  <div class="w-full text-xs flex flex-row justify-between">
+                    <span class="font-medium text-muted-foreground">内存</span>
+                    <span class="font-semibold tabular-nums">{{ memPercentage.toFixed(1) }}%</span>
+                  </div>
+                  <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+                  <div class="text-[11px] text-muted-foreground truncate tabular-nums">
+                    {{ formatBytes(props.node.ram ?? 0) }} / {{ formatBytes(props.node.mem_total ?? 0) }}
+                  </div>
+                </div>
+
+                <!-- 硬盘 -->
+                <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
+                  <div class="w-full text-xs flex flex-row justify-between">
+                    <span class="font-medium text-muted-foreground">硬盘</span>
+                    <span class="font-semibold tabular-nums">{{ diskPercentage.toFixed(1) }}%</span>
+                  </div>
+                  <ProgressThin :percentage="diskPercentage" :status="diskStatus" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+                  <div class="text-[11px] text-muted-foreground truncate tabular-nums">
+                    {{ formatBytes(props.node.disk ?? 0) }} / {{ formatBytes(props.node.disk_total ?? 0) }}
+                  </div>
+                </div>
+
+                <!-- 流量进度条 -->
+                <div class="flex flex-col gap-1 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
+                  <div class="w-full text-xs flex flex-row justify-between">
+                    <span class="font-medium text-muted-foreground">流量</span>
+                    <span class="font-semibold tabular-nums">{{ trafficUsedPercentage.toFixed(1) }}%</span>
+                  </div>
+                  <ProgressThin :percentage="trafficUsedPercentage" status="success" :height="4" class="bg-slate-500/20 dark:bg-slate-300/20" />
+                  <div class="text-[11px] text-muted-foreground truncate tabular-nums">
+                    {{ formatBytes(trafficUsed) }} /
+                    <template v-if="showTrafficProgress(node)">
+                      {{ formatBytes(props.node.traffic_limit) }}
+                    </template>
+                    <template v-else>
+                      ∞
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <div class="gap-1.5 grid grid-cols-2 relative">
+                <div
+                  v-if="!props.node.online"
+                  class="absolute inset-0 flex flex-col gap-1 items-center justify-center z-1 text-center" aria-hidden="true"
+                >
+                  <div class="text-sm font-medium text-destructive">
+                    离线
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    {{ offlineTime }}
+                  </div>
+                </div>
+                <div
+                  class="flex flex-col gap-0.5 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10"
+                  :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
+                >
+                  <div class="text-[10px] font-medium tracking-wide text-muted-foreground">
+                    实时速率
+                  </div>
+                  <div class="text-[11px] flex flex-col tabular-nums">
+                    <div class="text-green-600 flex flex-row items-center gap-1">
+                      <Icon icon="tabler:chevron-up" width="12" height="12" />
+                      {{ formatBytesPerSecond(props.node.net_out ?? 0) }}
+                    </div>
+                    <div class="text-blue-600 flex flex-row items-center gap-1">
+                      <Icon icon="tabler:chevron-down" width="12" height="12" />
+                      {{ formatBytesPerSecond(props.node.net_in ?? 0) }}
+                    </div>
+                  </div>
+                </div>
+                <div
+                  class="flex flex-col gap-0.5 rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10"
+                  :class="[!props.node.online ? 'blur-xs opacity-60' : '']"
+                >
+                  <div class="text-[10px] font-medium tracking-wide text-muted-foreground">
+                    累计流量
+                  </div>
+                  <div class="text-[11px] text-muted-foreground flex flex-col tabular-nums">
+                    <div class="flex flex-row items-center gap-1">
+                      <Icon icon="tabler:upload" width="12" height="12" />
+                      {{ formatBytes(props.node.net_total_up ?? 0) }}
+                    </div>
+                    <div class="flex flex-row items-center gap-1">
+                      <Icon icon="tabler:download" width="12" height="12" />
+                      {{ formatBytes(props.node.net_total_down ?? 0) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                v-if="subscriptionInfo"
+                class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
+                :class="[subscriptionToneClass, !props.node.online ? 'blur-xs opacity-60' : '']"
+                :title="`${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText}`"
+              >
+                <div class="flex min-w-0 flex-col gap-0.5">
+                  <div class="flex min-w-0 items-center gap-1.5">
+                    <Icon icon="tabler:calendar-dollar" :width="14" :height="14" class="shrink-0 text-muted-foreground" />
+                    <span class="shrink-0 font-medium text-muted-foreground">订阅</span>
+                    <span class="text-muted-foreground">·</span>
+                    <span class="truncate font-medium" :class="subscriptionStatusClass">{{ subscriptionInfo.expireText }}</span>
+                  </div>
+                  <div class="pl-5 text-[10px] text-muted-foreground tabular-nums">
+                    {{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}
+                  </div>
+                </div>
+                <span class="shrink-0 font-semibold tabular-nums">{{ subscriptionInfo.priceText }}</span>
+              </div>
+
+              <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1 items-center">
+                <Badge
+                  v-for="(tag, index) in customTags" :key="index" variant="outline"
+                  class="!text-[11px] rounded border-muted-foreground/20 bg-background/45 px-1.5 text-muted-foreground"
+                >
+                  {{ tag }}
+                </Badge>
+              </div>
             </div>
           </div>
-          <span class="shrink-0 font-semibold tabular-nums">{{ subscriptionInfo.priceText }}</span>
-        </div>
-        <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1 items-center">
-          <Badge
-            v-for="(tag, index) in customTags" :key="index" variant="outline"
-            class="!text-[11px] rounded border-muted-foreground/20 bg-background/45 px-1.5 text-muted-foreground"
-          >
-            {{ tag }}
-          </Badge>
         </div>
       </div>
     </template>
@@ -358,5 +451,19 @@ function hasRegion(region: string | null | undefined): boolean {
 .node-card {
   position: relative;
   overflow: hidden;
+}
+
+.node-card-details {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 280ms ease,
+    opacity 180ms ease;
+}
+
+.node-card-details--open {
+  grid-template-rows: 1fr;
+  opacity: 1;
 }
 </style>
