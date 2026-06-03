@@ -154,9 +154,10 @@ function hasRegion(region: string | null | undefined): boolean {
 <template>
   <CardX
     hoverable
+    size="small"
     :segmented="{ content: true }"
     header-class="bg-slate-500/[0.025]"
-    content-class="!pt-3"
+    content-class="!p-2.5"
     class="node-card w-full cursor-pointer border-none bg-background/75 shadow-[0_0_0_1px] shadow-slate-500/15 backdrop-blur-md transition-all duration-200 hover:bg-background/95 hover:shadow-[0_0_0_2px] hover:shadow-green-600/15 rounded-md"
     :class="[!props.node.online && '!shadow-red-600/20']" @click="emit('click')"
   >
@@ -178,13 +179,24 @@ function hasRegion(region: string | null | undefined): boolean {
     </template>
 
     <template #header-extra>
-      <div class="flex gap-2 items-center">
+      <div class="flex gap-1.5 items-center">
         <Button
-          type="button" variant="ghost" size="icon-sm" aria-label="查看延迟图表" title="延迟监控"
+          type="button" variant="ghost" size="icon-xs" aria-label="查看延迟图表" title="延迟监控"
           class="size-7 rounded-sm bg-slate-500/8 text-muted-foreground ring-1 ring-inset ring-slate-500/10 hover:bg-green-600/10 hover:text-green-600 hover:ring-green-600/20"
           @click.stop="emit('showPing')"
         >
           <Icon icon="tabler:chart-line" :width="18" :height="18" />
+        </Button>
+        <Button
+          type="button" variant="ghost" size="icon-xs" :aria-expanded="isExpanded"
+          :aria-label="isExpanded ? '收起节点详情' : '展开节点详情'" :title="isExpanded ? '收起详情' : '展开详情'"
+          class="size-7 rounded-sm bg-slate-500/8 text-muted-foreground ring-1 ring-inset ring-slate-500/10 hover:bg-green-600/10 hover:text-green-600 hover:ring-green-600/20"
+          @click.stop="isExpanded = !isExpanded"
+        >
+          <Icon
+            icon="tabler:chevron-down" :width="18" :height="18"
+            class="transition-transform duration-300" :class="isExpanded && 'rotate-180'"
+          />
         </Button>
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
@@ -195,114 +207,83 @@ function hasRegion(region: string | null | undefined): boolean {
     </template>
 
     <template #default>
-      <div class="flex flex-col gap-2">
-        <!-- 折叠态摘要：默认保持紧凑，但保留最常用的信息。 -->
+      <div class="flex flex-col">
         <div
-          class="flex min-w-0 flex-col gap-1 rounded-md bg-gradient-to-br from-green-600/[0.085] to-green-600/[0.025] px-2.5 py-2 text-[11px] ring-1 ring-inset ring-green-600/15"
+          class="rounded-md bg-gradient-to-br from-slate-500/[0.07] via-background/35 to-green-600/[0.045] px-2.5 py-2 ring-1 ring-inset ring-slate-500/10"
           :title="machineDetails"
         >
-          <div class="flex min-w-0 items-center gap-1.5">
-            <Icon icon="tabler:server-cog" :width="14" :height="14" class="shrink-0 text-green-600" />
-            <span class="shrink-0 font-medium text-green-700 dark:text-green-500">整机配置</span>
-            <span class="text-green-700/45 dark:text-green-400/45">·</span>
-            <span class="truncate font-semibold tabular-nums text-foreground/90">{{ machineSummary }}</span>
-          </div>
-          <div class="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
-            <Icon icon="tabler:cpu" :width="12" :height="12" class="shrink-0" />
-            <span class="truncate">{{ cpuDisplayName }}</span>
+          <div class="flex min-w-0 items-start justify-between gap-2">
+            <div class="min-w-0 flex-1">
+              <div class="flex min-w-0 items-center gap-1.5 text-[11px] leading-4">
+                <Icon icon="tabler:server-cog" :width="13" :height="13" class="shrink-0 text-green-600" />
+                <span class="shrink-0 font-semibold tabular-nums text-foreground/90">{{ machineSummary }}</span>
+                <span class="min-w-0 truncate text-muted-foreground">{{ cpuDisplayName }}</span>
+              </div>
+              <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] leading-4 text-muted-foreground">
+                <span class="inline-flex items-baseline gap-0.5">
+                  CPU <strong class="font-semibold text-foreground/80 tabular-nums">{{ (props.node.cpu ?? 0).toFixed(1) }}%</strong>
+                </span>
+                <span class="inline-flex items-baseline gap-0.5">
+                  内存 <strong class="font-semibold text-foreground/80 tabular-nums">{{ memPercentage.toFixed(1) }}%</strong>
+                </span>
+                <span class="inline-flex items-baseline gap-0.5">
+                  硬盘 <strong class="font-semibold text-foreground/80 tabular-nums">{{ diskPercentage.toFixed(1) }}%</strong>
+                </span>
+                <span
+                  v-if="subscriptionInfo"
+                  class="inline-flex min-w-0 items-center gap-1 rounded bg-background/45 px-1.5 py-0.5 ring-1 ring-inset ring-slate-500/10"
+                  :class="subscriptionStatusClass"
+                >
+                  <Icon icon="tabler:calendar-event" :width="11" :height="11" class="shrink-0" />
+                  <span class="truncate tabular-nums">到期 {{ subscriptionInfo.expireDateText }}</span>
+                </span>
+              </div>
+            </div>
+            <div class="shrink-0 text-right text-[10px] leading-4 tabular-nums">
+              <template v-if="props.node.online">
+                <div class="flex justify-end items-center gap-0.5 text-green-600">
+                  <Icon icon="tabler:chevron-up" width="11" height="11" />
+                  {{ formatBytesPerSecond(props.node.net_out ?? 0) }}
+                </div>
+                <div class="flex justify-end items-center gap-0.5 text-blue-600">
+                  <Icon icon="tabler:chevron-down" width="11" height="11" />
+                  {{ formatBytesPerSecond(props.node.net_in ?? 0) }}
+                </div>
+              </template>
+              <template v-else>
+                <div class="font-semibold text-red-600">
+                  离线
+                </div>
+                <div class="max-w-24 truncate text-muted-foreground">
+                  {{ offlineTime }}
+                </div>
+              </template>
+            </div>
           </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-1.5">
-          <div class="rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
-            <div class="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
-              <Icon icon="tabler:cpu" :width="12" :height="12" class="text-green-600" />
-              CPU
-            </div>
-            <div class="mt-0.5 text-xs font-semibold tabular-nums">
-              {{ (props.node.cpu ?? 0).toFixed(1) }}%
-            </div>
-          </div>
-          <div class="rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
-            <div class="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
-              <Icon icon="tabler:device-desktop-analytics" :width="12" :height="12" class="text-blue-600" />
-              内存
-            </div>
-            <div class="mt-0.5 text-xs font-semibold tabular-nums">
-              {{ memPercentage.toFixed(1) }}%
-            </div>
-          </div>
-          <div class="rounded-md bg-slate-500/[0.055] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
-            <div class="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
-              <Icon icon="tabler:database" :width="12" :height="12" class="text-amber-600" />
-              硬盘
-            </div>
-            <div class="mt-0.5 text-xs font-semibold tabular-nums">
-              {{ diskPercentage.toFixed(1) }}%
-            </div>
-          </div>
-        </div>
-
-        <div
-          class="flex min-w-0 items-center justify-between gap-2 rounded-md bg-slate-500/[0.055] px-2 py-1.5 text-[11px] ring-1 ring-inset ring-slate-500/10"
-        >
-          <div class="flex min-w-0 items-center gap-1.5">
-            <Icon
-              :icon="props.node.online ? 'tabler:activity-heartbeat' : 'tabler:cloud-off'"
-              :width="14" :height="14" class="shrink-0" :class="props.node.online ? 'text-green-600' : 'text-red-600'"
-            />
-            <span class="shrink-0 font-medium text-muted-foreground">{{ props.node.online ? '实时网络' : '节点离线' }}</span>
-          </div>
-          <div v-if="props.node.online" class="flex shrink-0 items-center gap-2 tabular-nums">
-            <span class="flex items-center gap-0.5 text-green-600">
-              <Icon icon="tabler:chevron-up" width="12" height="12" />
-              {{ formatBytesPerSecond(props.node.net_out ?? 0) }}
-            </span>
-            <span class="flex items-center gap-0.5 text-blue-600">
-              <Icon icon="tabler:chevron-down" width="12" height="12" />
-              {{ formatBytesPerSecond(props.node.net_in ?? 0) }}
-            </span>
-          </div>
-          <span v-else class="truncate text-[10px] text-red-600/85 tabular-nums">{{ offlineTime }}</span>
-        </div>
-
-        <div
-          v-if="subscriptionInfo"
-          class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
-          :class="subscriptionToneClass"
-          :title="`${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText}`"
-        >
-          <div class="flex min-w-0 items-center gap-1.5">
-            <Icon icon="tabler:calendar-dollar" :width="14" :height="14" class="shrink-0 text-muted-foreground" />
-            <span class="truncate font-medium" :class="subscriptionStatusClass">{{ subscriptionInfo.expireText }}</span>
-          </div>
-          <span class="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-            {{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}
-          </span>
-        </div>
-
-        <Button
-          type="button" variant="ghost" size="xs" :aria-expanded="isExpanded"
-          :aria-label="isExpanded ? '收起节点详情' : '展开节点详情'"
-          class="h-7 w-full gap-1.5 rounded-sm bg-slate-500/[0.045] text-[11px] text-muted-foreground ring-1 ring-inset ring-slate-500/10 hover:bg-green-600/[0.07] hover:text-green-700 hover:ring-green-600/15 dark:hover:text-green-500"
-          @click.stop="isExpanded = !isExpanded"
-        >
-          <span>{{ isExpanded ? '收起详情' : '展开详情' }}</span>
-          <Icon
-            icon="tabler:chevron-down" :width="14" :height="14"
-            class="transition-transform duration-300" :class="isExpanded && 'rotate-180'"
-          />
-        </Button>
-
-        <div class="node-card-details" :class="isExpanded && 'node-card-details--open'" :aria-hidden="!isExpanded">
-          <div class="min-h-0 overflow-hidden">
-            <div class="flex flex-col gap-2.5 border-t border-slate-500/10 pt-2.5">
+        <Transition name="node-card-details">
+          <div v-if="isExpanded" class="node-card-details">
+            <div class="flex flex-col gap-2.5 border-t border-slate-500/10 mt-2.5 pt-2.5">
               <div class="flex items-center justify-between px-0.5">
                 <div class="flex items-center gap-1.5 text-[11px] font-semibold text-foreground/80">
                   <Icon icon="tabler:adjustments-horizontal" :width="14" :height="14" class="text-green-600" />
-                  资源明细
+                  诊断面板
                 </div>
-                <span class="text-[10px] text-muted-foreground">点击卡片进入节点详情</span>
+                <span class="text-[10px] text-muted-foreground">展开后再看细节</span>
+              </div>
+
+              <div class="rounded-md bg-green-600/[0.045] px-2 py-1.5 ring-1 ring-inset ring-green-600/10">
+                <div class="flex min-w-0 items-center gap-1.5 text-[11px]">
+                  <Icon icon="tabler:cpu" :width="13" :height="13" class="shrink-0 text-green-600" />
+                  <span class="shrink-0 font-medium text-muted-foreground">CPU</span>
+                  <span class="min-w-0 truncate font-semibold">{{ cpuDisplayName }}</span>
+                </div>
+                <div class="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 pl-5 text-[10px] text-muted-foreground tabular-nums">
+                  <span>{{ props.node.cpu_cores > 0 ? `${props.node.cpu_cores} 核` : '核心数未知' }}</span>
+                  <span>内存 {{ formatBytes(props.node.mem_total ?? 0) }}</span>
+                  <span>硬盘 {{ formatBytes(props.node.disk_total ?? 0) }}</span>
+                </div>
               </div>
 
               <div class="gap-2 grid grid-cols-2">
@@ -441,7 +422,7 @@ function hasRegion(region: string | null | undefined): boolean {
               </div>
             </div>
           </div>
-        </div>
+        </Transition>
       </div>
     </template>
   </CardX>
@@ -453,17 +434,16 @@ function hasRegion(region: string | null | undefined): boolean {
   overflow: hidden;
 }
 
-.node-card-details {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
+.node-card-details-enter-active,
+.node-card-details-leave-active {
   transition:
-    grid-template-rows 280ms ease,
-    opacity 180ms ease;
+    opacity 180ms ease,
+    transform 180ms ease;
 }
 
-.node-card-details--open {
-  grid-template-rows: 1fr;
-  opacity: 1;
+.node-card-details-enter-from,
+.node-card-details-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 </style>
