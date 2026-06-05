@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
-import { defineAsyncComponent } from 'vue'
+import { defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Spinner } from '@/components/ui/spinner'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   node: NodeData
 }>()
@@ -13,6 +14,55 @@ const emit = defineEmits<{
 }>()
 
 const PingChart = defineAsyncComponent(() => import('@/components/PingChart.vue'))
+const CHART_RENDER_DELAY_MS = 220
+const shouldRenderChart = ref(false)
+let chartRenderFrame: number | null = null
+let chartRenderTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearScheduledChartRender() {
+  if (chartRenderFrame !== null) {
+    window.cancelAnimationFrame(chartRenderFrame)
+    chartRenderFrame = null
+  }
+
+  if (chartRenderTimer !== null) {
+    window.clearTimeout(chartRenderTimer)
+    chartRenderTimer = null
+  }
+}
+
+function scheduleChartRender(open: boolean) {
+  clearScheduledChartRender()
+  shouldRenderChart.value = false
+
+  if (!open)
+    return
+
+  void nextTick(() => {
+    if (!props.open)
+      return
+
+    chartRenderFrame = window.requestAnimationFrame(() => {
+      chartRenderFrame = null
+      chartRenderTimer = window.setTimeout(() => {
+        chartRenderTimer = null
+        if (props.open) {
+          shouldRenderChart.value = true
+        }
+      }, CHART_RENDER_DELAY_MS)
+    })
+  })
+}
+
+watch(() => props.open, scheduleChartRender, { immediate: true })
+
+watch(() => props.node.uuid, () => {
+  scheduleChartRender(props.open)
+})
+
+onBeforeUnmount(() => {
+  clearScheduledChartRender()
+})
 </script>
 
 <template>
@@ -27,7 +77,10 @@ const PingChart = defineAsyncComponent(() => import('@/components/PingChart.vue'
         </DialogDescription>
       </div>
       <div class="p-4 sm:p-6">
-        <PingChart :uuid="node.uuid" />
+        <PingChart v-if="shouldRenderChart" :uuid="node.uuid" />
+        <div v-else class="h-80 rounded-md bg-background/50">
+          <Spinner class="h-full" content-class="bg-transparent backdrop-blur-0" />
+        </div>
       </div>
     </DialogContent>
   </Dialog>

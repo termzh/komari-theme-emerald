@@ -16,6 +16,7 @@ import { formatPriceWithCycle, getDaysUntilExpired, getExpireStatus, parseTags }
 const props = defineProps<{ node: NodeData }>()
 const emit = defineEmits<{
   click: []
+  prefetchPing: []
   showPing: []
 }>()
 const CPU_TRADEMARK_REGEX = /\((?:R|TM)\)/gi
@@ -183,6 +184,8 @@ function hasRegion(region: string | null | undefined): boolean {
         <Button
           type="button" variant="ghost" size="icon-xs" aria-label="查看延迟图表" title="延迟监控"
           class="size-7 rounded-sm bg-slate-500/8 text-muted-foreground ring-1 ring-inset ring-slate-500/10 hover:bg-green-600/10 hover:text-green-600 hover:ring-green-600/20"
+          @focus="emit('prefetchPing')"
+          @pointerenter="emit('prefetchPing')"
           @click.stop="emit('showPing')"
         >
           <Icon icon="tabler:chart-line" :width="18" :height="18" />

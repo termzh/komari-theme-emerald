@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { useDebounceFn } from '@vueuse/core'
-import { computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -19,11 +19,15 @@ defineOptions({ name: 'HomeView' })
 const NodeCard = defineAsyncComponent(() => import('@/components/NodeCard.vue'))
 const NodeGeneralCards = defineAsyncComponent(() => import('@/components/NodeGeneralCards.vue'))
 const NodeList = defineAsyncComponent(() => import('@/components/NodeList.vue'))
-const NodePingDialog = defineAsyncComponent(() => import('@/components/NodePingDialog.vue'))
+const loadNodePingDialog = () => import('@/components/NodePingDialog.vue')
+const loadPingChart = () => import('@/components/PingChart.vue')
+const NodePingDialog = defineAsyncComponent(loadNodePingDialog)
 
 const appStore = useAppStore()
 const nodesStore = useNodesStore()
 const router = useRouter()
+let pingDialogPreloadPromise: Promise<unknown> | null = null
+let pingDialogPreloadTimer: ReturnType<typeof window.setTimeout> | null = null
 
 onActivated(() => {
   if (appStore.homeScrollPosition > 0) {
@@ -35,6 +39,20 @@ onActivated(() => {
 
 onDeactivated(() => {
   appStore.homeScrollPosition = window.scrollY
+})
+
+onMounted(() => {
+  pingDialogPreloadTimer = window.setTimeout(() => {
+    pingDialogPreloadTimer = null
+    void preloadNodePingDialog()
+  }, 1000)
+})
+
+onBeforeUnmount(() => {
+  if (pingDialogPreloadTimer !== null) {
+    window.clearTimeout(pingDialogPreloadTimer)
+    pingDialogPreloadTimer = null
+  }
 })
 
 const searchText = ref('')
@@ -96,7 +114,17 @@ function handleNodeClick(node: typeof nodesStore.nodes[number]) {
   router.push({ name: 'instance-detail', params: { id: node.uuid } })
 }
 
+function preloadNodePingDialog() {
+  pingDialogPreloadPromise ??= Promise.all([
+    loadNodePingDialog(),
+    loadPingChart(),
+  ])
+
+  return pingDialogPreloadPromise
+}
+
 function showNodePing(node: typeof nodesStore.nodes[number]) {
+  void preloadNodePingDialog()
   selectedPingNode.value = node
 }
 
@@ -181,7 +209,7 @@ function handlePingDialogOpen(open: boolean) {
             >
               <NodeCard
                 v-for="node in nodeList" :key="node.uuid" :node="node"
-                @click="handleNodeClick(node)" @show-ping="showNodePing(node)"
+                @click="handleNodeClick(node)" @show-ping="showNodePing(node)" @prefetch-ping="preloadNodePingDialog"
               />
             </div>
             <NodeList

@@ -250,9 +250,17 @@ const mergedData = computed(() => {
     const ts = dayjs(rec.time).valueOf()
     let anchor: number | null = null
 
-    for (const a of anchors) {
-      if (Math.abs(a - ts) <= toleranceMs) {
-        anchor = a
+    for (let i = anchors.length - 1; i >= 0; i--) {
+      const existingAnchor = anchors[i]
+      if (existingAnchor === undefined)
+        continue
+
+      const delta = ts - existingAnchor
+      if (delta > toleranceMs)
+        break
+
+      if (Math.abs(delta) <= toleranceMs) {
+        anchor = existingAnchor
         break
       }
     }
