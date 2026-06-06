@@ -53,11 +53,15 @@ onBeforeUnmount(() => {
     window.clearTimeout(pingDialogPreloadTimer)
     pingDialogPreloadTimer = null
   }
+  clearPingDialogCloseTimer()
 })
 
 const searchText = ref('')
 const debouncedSearchText = ref('')
 const selectedPingNode = ref<typeof nodesStore.nodes[number] | null>(null)
+const pingDialogOpen = ref(false)
+const pingDialogScrollTop = ref(0)
+let pingDialogCloseTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const updateDebouncedSearch = useDebounceFn((value: string) => {
   debouncedSearchText.value = value
@@ -123,15 +127,46 @@ function preloadNodePingDialog() {
   return pingDialogPreloadPromise
 }
 
+function clearPingDialogCloseTimer() {
+  if (pingDialogCloseTimer !== null) {
+    window.clearTimeout(pingDialogCloseTimer)
+    pingDialogCloseTimer = null
+  }
+}
+
+function restorePingDialogScroll() {
+  const top = pingDialogScrollTop.value
+
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top, behavior: 'instant' })
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top, behavior: 'instant' })
+    })
+  })
+}
+
 function showNodePing(node: typeof nodesStore.nodes[number]) {
+  clearPingDialogCloseTimer()
   void preloadNodePingDialog()
+  pingDialogScrollTop.value = window.scrollY
   selectedPingNode.value = node
+  pingDialogOpen.value = true
 }
 
 function handlePingDialogOpen(open: boolean) {
-  if (!open) {
-    selectedPingNode.value = null
+  pingDialogOpen.value = open
+
+  if (open) {
+    clearPingDialogCloseTimer()
+    return
   }
+
+  restorePingDialogScroll()
+  pingDialogCloseTimer = window.setTimeout(() => {
+    pingDialogCloseTimer = null
+    selectedPingNode.value = null
+    restorePingDialogScroll()
+  }, 260)
 }
 </script>
 
@@ -224,7 +259,7 @@ function handlePingDialogOpen(open: boolean) {
       </div>
     </div>
     <NodePingDialog
-      v-if="selectedPingNode" :open="true" :node="selectedPingNode"
+      v-if="selectedPingNode" :open="pingDialogOpen" :node="selectedPingNode"
       @update:open="handlePingDialogOpen"
     />
   </div>

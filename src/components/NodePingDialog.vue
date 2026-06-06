@@ -67,7 +67,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <DialogContent class="gap-0 p-0 sm:max-w-5xl">
+    <DialogContent class="gap-0 p-0 sm:max-w-5xl" @close-auto-focus.prevent>
       <div class="sticky top-0 z-10 border-b bg-background/95 px-4 py-4 pr-14 backdrop-blur sm:px-6">
         <DialogTitle class="truncate text-base sm:text-lg">
           {{ node.name }} - 延迟监控
