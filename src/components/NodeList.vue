@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
+import type { RenewalDisplayInfo } from '@/utils/tagHelper'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
 import NodePingListCell from '@/components/NodePingListCell.vue'
@@ -11,7 +12,7 @@ import { useAppStore } from '@/stores/app'
 import { formatBytesPerSecondWithConfig, formatBytesWithConfig, formatDateTime, formatUptimeWithFormat, getStatus } from '@/utils/helper'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getRegionCode, getRegionDisplayName } from '@/utils/regionHelper'
-import { formatPriceWithCycle, getDaysUntilExpired, getExpireStatus, parseTags } from '@/utils/tagHelper'
+import { getRenewalDisplayInfo, parseTags } from '@/utils/tagHelper'
 
 interface ColumnConfig {
   key: string
@@ -100,6 +101,13 @@ const gridStyle = computed(() => ({
   gridTemplateColumns: columns.map(c => c.width).join(' '),
 }))
 
+const renewalInfoByUuid = computed(() => {
+  const lang = appStore.lang
+  return new Map<string, RenewalDisplayInfo | null>(
+    props.nodes.map(node => [node.uuid, getRenewalDisplayInfo(node, lang)]),
+  )
+})
+
 const offlineOverlayContentStyle = computed(() => {
   const keys = columnKeys.value
   const statusIndex = keys.indexOf('status')
@@ -167,21 +175,33 @@ function formatOfflineTime(node: NodeData): string {
   return formatDateTime(node.time)
 }
 
-function getPriceTags(node: NodeData): Array<string> {
-  const tags: Array<string> = []
-  const lang = appStore.lang
-  if (node.price !== 0) {
-    const days = getDaysUntilExpired(node.expired_at)
-    const status = getExpireStatus(node.expired_at)
-    if (status === 'expired')
-      tags.push(lang === 'zh-CN' ? '已过期' : 'Expired')
-    else if (status === 'long_term')
-      tags.push(lang === 'zh-CN' ? '长期' : 'Long-term')
-    else tags.push(lang === 'zh-CN' ? `剩余 ${days} 天` : `${days} days left`)
-    const priceText = formatPriceWithCycle(node.price, node.billing_cycle, node.currency, lang)
-    tags.push(priceText)
+function getRenewalInfo(node: NodeData): RenewalDisplayInfo | null {
+  return renewalInfoByUuid.value.get(node.uuid) ?? null
+}
+
+function getRenewalInfoList(node: NodeData): RenewalDisplayInfo[] {
+  const renewal = getRenewalInfo(node)
+  return renewal ? [renewal] : []
+}
+
+function getRenewalBadgeClass(status: RenewalDisplayInfo['status']): string {
+  switch (status) {
+    case 'expired':
+    case 'critical': return 'bg-red-500/10 text-red-700 ring-red-500/20 dark:text-red-300'
+    case 'warning': return 'bg-amber-500/15 text-amber-700 ring-amber-500/25 dark:text-amber-300'
+    case 'normal': return 'bg-emerald-600/10 text-emerald-700 ring-emerald-600/20 dark:text-emerald-300'
+    default: return 'bg-slate-500/10 text-muted-foreground ring-slate-500/15'
   }
-  return tags
+}
+
+function getRenewalTextClass(status: RenewalDisplayInfo['status']): string {
+  switch (status) {
+    case 'expired':
+    case 'critical': return 'text-red-600 dark:text-red-400'
+    case 'warning': return 'text-amber-600 dark:text-amber-400'
+    case 'normal': return 'text-emerald-600 dark:text-emerald-400'
+    default: return 'text-muted-foreground'
+  }
 }
 
 function getCustomTags(node: NodeData): Array<string> {
@@ -224,8 +244,8 @@ function getCustomTags(node: NodeData): Array<string> {
             </div>
 
             <!-- 节点名称 -->
-            <div v-else-if="col.key === 'name'" class="space-y-0.5" :class="[!node.online && 'blur-sm opacity-30']">
-              <div class="flex gap-1 items-center text-xs font-semibold">
+            <div v-else-if="col.key === 'name'" class="min-w-0 space-y-0.5" :class="[!node.online && 'blur-sm opacity-30']">
+              <div class="flex min-w-0 gap-1 items-center text-xs font-semibold">
                 <img
                   v-if="hasRegion(node.region)" :src="getFlagSrc(node.region)"
                   :alt="getRegionDisplayName(node.region)" class="size-5 rounded-sm"
@@ -233,11 +253,21 @@ function getCustomTags(node: NodeData): Array<string> {
                 <span class="truncate">{{ node.name }}</span>
               </div>
               <div
-                v-if="getPriceTags(node).length > 0"
-                class="text-[11px] text-muted-foreground/70 truncate"
+                v-for="renewal in getRenewalInfoList(node)"
+                :key="`${renewal.status}-${renewal.expireDateText}`"
+                class="flex min-w-0 items-center gap-1 text-[10px] leading-4"
               >
-                <span v-for="(tag, index) in getPriceTags(node)" :key="index" :class="!!index && 'ml-3'">
-                  {{ tag }}
+                <span
+                  class="shrink-0 rounded-sm px-1 py-0.5 font-semibold leading-3 ring-1 ring-inset"
+                  :class="getRenewalBadgeClass(renewal.status)"
+                >
+                  {{ renewal.statusLabel }}
+                </span>
+                <span class="shrink-0 font-semibold tabular-nums" :class="getRenewalTextClass(renewal.status)">
+                  {{ renewal.expireText }}
+                </span>
+                <span class="min-w-0 truncate text-muted-foreground/75 tabular-nums">
+                  {{ renewal.expireDateText }} · {{ renewal.priceText }}
                 </span>
               </div>
             </div>

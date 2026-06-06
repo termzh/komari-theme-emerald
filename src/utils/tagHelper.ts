@@ -116,6 +116,26 @@ const EXPIRE_THRESHOLDS = {
 const TAG_COLOR_SUFFIX_REGEX = /<(\w+)>$/
 const TAG_COLOR_SUFFIX_REMOVE_REGEX = /<\w+>$/
 
+export interface RenewalDisplaySource {
+  price: number
+  billing_cycle: number
+  auto_renewal?: boolean
+  currency: string
+  expired_at?: string | number | null
+}
+
+export interface RenewalDisplayInfo {
+  actionText: string
+  days: number
+  expireDateText: string
+  expireLabel: string
+  expireText: string
+  priceText: string
+  renewalModeText: string
+  status: ExpireStatus
+  statusLabel: string
+}
+
 /**
  * 解析计费周期类型
  * @param billingCycle 计费周期（天）
@@ -163,7 +183,7 @@ export function getBillingCycleText(billingCycle: number, lang: 'zh-CN' | 'en-US
  * @param expiredAt 过期时间（字符串或时间戳）
  * @returns 距离过期的天数，负数表示已过期
  */
-export function getDaysUntilExpired(expiredAt: string | number | undefined): number {
+export function getDaysUntilExpired(expiredAt: string | number | null | undefined): number {
   if (!expiredAt)
     return 0
 
@@ -181,10 +201,10 @@ export function getDaysUntilExpired(expiredAt: string | number | undefined): num
  * @param expiredAt 过期时间
  * @returns 过期状态
  */
-export function getExpireStatus(expiredAt: string | number | undefined): ExpireStatus {
+export function getExpireStatus(expiredAt: string | number | null | undefined): ExpireStatus {
   const days = getDaysUntilExpired(expiredAt)
 
-  if (days <= 0)
+  if (days < 0)
     return 'expired'
   if (days <= EXPIRE_THRESHOLDS.critical)
     return 'critical'
@@ -254,10 +274,103 @@ export function getExpireText(expiredAt: string | number | undefined, lang: 'zh-
     return lang === 'zh-CN' ? '长期' : 'Long-term'
   }
 
+  if (days === 0) {
+    return lang === 'zh-CN' ? '今日到期' : 'Expires today'
+  }
+
   if (lang === 'zh-CN') {
     return `${days} 天后过期`
   }
   return `Expires in ${days} days`
+}
+
+export function getRenewalDisplayInfo(
+  source: RenewalDisplaySource,
+  lang: 'zh-CN' | 'en-US' = 'zh-CN',
+): RenewalDisplayInfo | null {
+  if (source.price === 0)
+    return null
+
+  const expireDate = dayjs(source.expired_at)
+  const hasExpireDate = Boolean(source.expired_at) && expireDate.isValid()
+  const days = hasExpireDate ? getDaysUntilExpired(source.expired_at) : 0
+  const status = hasExpireDate ? getExpireStatus(source.expired_at) : 'warning'
+  const overdueDays = Math.abs(days)
+  const expireDateText = hasExpireDate ? expireDate.format('YYYY-MM-DD') : '-'
+  const priceText = formatPriceWithCycle(source.price, source.billing_cycle, source.currency, lang)
+  const noRenewalRequired = status === 'long_term' || source.billing_cycle === -1 || source.price === -1
+
+  if (lang === 'en-US') {
+    const statusLabelMap: Record<ExpireStatus, string> = {
+      expired: 'Overdue',
+      critical: 'Urgent',
+      warning: 'Soon',
+      normal: 'OK',
+      long_term: 'Long-term',
+    }
+    const actionTextMap: Record<ExpireStatus, string> = {
+      expired: 'Renew now',
+      critical: 'Renew soon',
+      warning: 'Plan renewal',
+      normal: 'Track renewal',
+      long_term: 'No action',
+    }
+
+    return {
+      actionText: actionTextMap[status],
+      days,
+      expireDateText,
+      expireLabel: 'Expires',
+      expireText: !hasExpireDate
+        ? 'Date missing'
+        : status === 'expired'
+          ? (days === 0 ? 'Expires today' : `${overdueDays} days overdue`)
+          : days === 0
+            ? 'Expires today'
+            : status === 'long_term'
+              ? 'Long-term'
+              : `${days} days left`,
+      priceText,
+      renewalModeText: noRenewalRequired ? 'No renewal' : source.auto_renewal ? 'Auto renew' : 'Manual renew',
+      status,
+      statusLabel: statusLabelMap[status],
+    }
+  }
+
+  const statusLabelMap: Record<ExpireStatus, string> = {
+    expired: '逾期',
+    critical: '紧急',
+    warning: '提醒',
+    normal: '正常',
+    long_term: '长期',
+  }
+  const actionTextMap: Record<ExpireStatus, string> = {
+    expired: '立即续费',
+    critical: '尽快续费',
+    warning: '安排续费',
+    normal: '续费计划',
+    long_term: '无需续费',
+  }
+
+  return {
+    actionText: actionTextMap[status],
+    days,
+    expireDateText,
+    expireLabel: '到期',
+    expireText: !hasExpireDate
+      ? '日期未设置'
+      : status === 'expired'
+        ? (days === 0 ? '今日到期' : `已过期 ${overdueDays} 天`)
+        : days === 0
+          ? '今日到期'
+          : status === 'long_term'
+            ? '长期有效'
+            : `剩余 ${days} 天`,
+    priceText,
+    renewalModeText: noRenewalRequired ? '无需续费' : source.auto_renewal ? '自动续费' : '手动续费',
+    status,
+    statusLabel: statusLabelMap[status],
+  }
 }
 
 /**

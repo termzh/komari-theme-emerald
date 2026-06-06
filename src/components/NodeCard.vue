@@ -11,7 +11,7 @@ import { useAppStore } from '@/stores/app'
 import { formatBytesPerSecondWithConfig, formatBytesSplit, formatBytesWithConfig, formatDateTime, formatUptimeWithFormat, getStatus } from '@/utils/helper'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getRegionCode, getRegionDisplayName } from '@/utils/regionHelper'
-import { formatPriceWithCycle, getDaysUntilExpired, getExpireStatus, parseTags } from '@/utils/tagHelper'
+import { getRenewalDisplayInfo, parseTags } from '@/utils/tagHelper'
 
 const props = defineProps<{ node: NodeData }>()
 const emit = defineEmits<{
@@ -102,46 +102,55 @@ const trafficUsed = computed(() => {
   }
 })
 
-const subscriptionInfo = computed(() => {
-  const lang = appStore.lang
-  const node = props.node
-  if (node.price === 0)
-    return null
-
-  const days = getDaysUntilExpired(node.expired_at)
-  const status = getExpireStatus(node.expired_at)
-  const expireText = status === 'expired'
-    ? (lang === 'zh-CN' ? '已过期' : 'Expired')
-    : status === 'long_term'
-      ? (lang === 'zh-CN' ? '长期有效' : 'Long-term')
-      : (lang === 'zh-CN' ? `剩余 ${days} 天` : `${days} days left`)
-
-  return {
-    status,
-    expireText,
-    expireLabel: lang === 'zh-CN' ? '到期' : 'Expires',
-    expireDateText: formatDateTime(node.expired_at, 'YYYY-MM-DD'),
-    priceText: formatPriceWithCycle(node.price, node.billing_cycle, node.currency, lang),
-  }
-})
+const subscriptionInfo = computed(() => getRenewalDisplayInfo(props.node, appStore.lang))
 
 const subscriptionToneClass = computed(() => {
   switch (subscriptionInfo.value?.status) {
     case 'expired':
-    case 'critical': return 'bg-red-500/[0.065] ring-red-500/15'
-    case 'warning': return 'bg-amber-500/[0.065] ring-amber-500/20'
-    case 'normal': return 'bg-green-600/[0.055] ring-green-600/10'
-    default: return 'bg-slate-500/[0.055] ring-slate-500/10'
+    case 'critical': return 'bg-red-500/[0.07] ring-red-500/20'
+    case 'warning': return 'bg-amber-500/[0.075] ring-amber-500/20'
+    case 'normal': return 'bg-emerald-600/[0.06] ring-emerald-600/15'
+    default: return 'bg-slate-500/[0.055] ring-slate-500/15'
   }
 })
 
 const subscriptionStatusClass = computed(() => {
   switch (subscriptionInfo.value?.status) {
     case 'expired':
-    case 'critical': return 'text-red-600'
-    case 'warning': return 'text-amber-600'
-    case 'normal': return 'text-green-600'
+    case 'critical': return 'text-red-600 dark:text-red-400'
+    case 'warning': return 'text-amber-600 dark:text-amber-400'
+    case 'normal': return 'text-emerald-600 dark:text-emerald-400'
     default: return 'text-muted-foreground'
+  }
+})
+
+const subscriptionBadgeClass = computed(() => {
+  switch (subscriptionInfo.value?.status) {
+    case 'expired':
+    case 'critical': return 'bg-red-500/10 text-red-700 ring-red-500/20 dark:text-red-300'
+    case 'warning': return 'bg-amber-500/15 text-amber-700 ring-amber-500/25 dark:text-amber-300'
+    case 'normal': return 'bg-emerald-600/10 text-emerald-700 ring-emerald-600/20 dark:text-emerald-300'
+    default: return 'bg-slate-500/10 text-muted-foreground ring-slate-500/15'
+  }
+})
+
+const subscriptionActionClass = computed(() => {
+  switch (subscriptionInfo.value?.status) {
+    case 'expired':
+    case 'critical': return 'bg-red-600 text-white shadow-sm shadow-red-600/15'
+    case 'warning': return 'bg-amber-500 text-white shadow-sm shadow-amber-500/15'
+    case 'normal': return 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/15'
+    default: return 'bg-slate-600 text-white shadow-sm shadow-slate-600/10'
+  }
+})
+
+const subscriptionIcon = computed(() => {
+  switch (subscriptionInfo.value?.status) {
+    case 'expired':
+    case 'critical': return 'tabler:alert-triangle'
+    case 'warning': return 'tabler:bell-ringing'
+    case 'normal': return 'tabler:calendar-check'
+    default: return 'tabler:calendar-time'
   }
 })
 
@@ -232,14 +241,6 @@ function hasRegion(region: string | null | undefined): boolean {
                 <span class="inline-flex items-baseline gap-0.5">
                   硬盘 <strong class="font-semibold text-foreground/80 tabular-nums">{{ diskPercentage.toFixed(1) }}%</strong>
                 </span>
-                <span
-                  v-if="subscriptionInfo"
-                  class="inline-flex min-w-0 items-center gap-1 rounded bg-background/45 px-1.5 py-0.5 ring-1 ring-inset ring-slate-500/10"
-                  :class="subscriptionStatusClass"
-                >
-                  <Icon icon="tabler:calendar-event" :width="11" :height="11" class="shrink-0" />
-                  <span class="truncate tabular-nums">到期 {{ subscriptionInfo.expireDateText }}</span>
-                </span>
               </div>
             </div>
             <div class="shrink-0 text-right text-[10px] leading-4 tabular-nums">
@@ -262,6 +263,41 @@ function hasRegion(region: string | null | undefined): boolean {
                 </div>
               </template>
             </div>
+          </div>
+        </div>
+
+        <div
+          v-if="subscriptionInfo"
+          class="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
+          :class="subscriptionToneClass"
+          :title="`${subscriptionInfo.statusLabel} · ${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText} · ${subscriptionInfo.renewalModeText}`"
+        >
+          <div class="min-w-0">
+            <div class="flex min-w-0 items-center gap-1.5">
+              <span
+                class="shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3 ring-1 ring-inset"
+                :class="subscriptionBadgeClass"
+              >
+                {{ subscriptionInfo.statusLabel }}
+              </span>
+              <Icon :icon="subscriptionIcon" :width="13" :height="13" class="shrink-0" :class="subscriptionStatusClass" />
+              <span class="min-w-0 truncate font-semibold tabular-nums" :class="subscriptionStatusClass">
+                {{ subscriptionInfo.expireText }}
+              </span>
+            </div>
+            <div class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-3 text-muted-foreground tabular-nums">
+              <span class="shrink-0">{{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}</span>
+              <span aria-hidden="true">·</span>
+              <span class="min-w-0 truncate">{{ subscriptionInfo.priceText }}</span>
+            </div>
+          </div>
+          <div class="flex shrink-0 flex-col items-end gap-0.5">
+            <span class="rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
+              {{ subscriptionInfo.actionText }}
+            </span>
+            <span class="text-[10px] leading-3 text-muted-foreground">
+              {{ subscriptionInfo.renewalModeText }}
+            </span>
           </div>
         </div>
 
@@ -397,22 +433,56 @@ function hasRegion(region: string | null | undefined): boolean {
 
               <div
                 v-if="subscriptionInfo"
-                class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
-                :class="[subscriptionToneClass, !props.node.online ? 'blur-xs opacity-60' : '']"
-                :title="`${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText}`"
+                class="rounded-md px-2.5 py-2 text-[11px] ring-1 ring-inset"
+                :class="subscriptionToneClass"
+                :title="`${subscriptionInfo.statusLabel} · ${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText} · ${subscriptionInfo.renewalModeText}`"
               >
-                <div class="flex min-w-0 flex-col gap-0.5">
-                  <div class="flex min-w-0 items-center gap-1.5">
-                    <Icon icon="tabler:calendar-dollar" :width="14" :height="14" class="shrink-0 text-muted-foreground" />
-                    <span class="shrink-0 font-medium text-muted-foreground">订阅</span>
-                    <span class="text-muted-foreground">·</span>
-                    <span class="truncate font-medium" :class="subscriptionStatusClass">{{ subscriptionInfo.expireText }}</span>
+                <div class="flex min-w-0 items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <Icon :icon="subscriptionIcon" :width="15" :height="15" class="shrink-0" :class="subscriptionStatusClass" />
+                      <span class="shrink-0 font-semibold text-foreground/85">续费提醒</span>
+                      <span
+                        class="shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3 ring-1 ring-inset"
+                        :class="subscriptionBadgeClass"
+                      >
+                        {{ subscriptionInfo.statusLabel }}
+                      </span>
+                    </div>
+                    <div class="mt-1 truncate text-sm font-bold tabular-nums" :class="subscriptionStatusClass">
+                      {{ subscriptionInfo.expireText }}
+                    </div>
                   </div>
-                  <div class="pl-5 text-[10px] text-muted-foreground tabular-nums">
-                    {{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}
+                  <span class="shrink-0 rounded-sm px-1.5 py-1 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
+                    {{ subscriptionInfo.actionText }}
+                  </span>
+                </div>
+                <div class="mt-2 grid grid-cols-3 gap-1.5 text-[10px] leading-4">
+                  <div class="min-w-0 rounded bg-background/45 px-1.5 py-1 ring-1 ring-inset ring-slate-500/10">
+                    <div class="text-muted-foreground">
+                      到期日期
+                    </div>
+                    <div class="truncate font-semibold tabular-nums">
+                      {{ subscriptionInfo.expireDateText }}
+                    </div>
+                  </div>
+                  <div class="min-w-0 rounded bg-background/45 px-1.5 py-1 ring-1 ring-inset ring-slate-500/10">
+                    <div class="text-muted-foreground">
+                      费用周期
+                    </div>
+                    <div class="truncate font-semibold tabular-nums">
+                      {{ subscriptionInfo.priceText }}
+                    </div>
+                  </div>
+                  <div class="min-w-0 rounded bg-background/45 px-1.5 py-1 ring-1 ring-inset ring-slate-500/10">
+                    <div class="text-muted-foreground">
+                      续费方式
+                    </div>
+                    <div class="truncate font-semibold">
+                      {{ subscriptionInfo.renewalModeText }}
+                    </div>
                   </div>
                 </div>
-                <span class="shrink-0 font-semibold tabular-nums">{{ subscriptionInfo.priceText }}</span>
               </div>
 
               <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1 items-center">
