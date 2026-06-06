@@ -18,7 +18,7 @@ const actionButtons = computed(() => {
   const buttons = [
     {
       title: appStore.themeMode === 'auto' ? '自动主题' : appStore.themeMode === 'light' ? '浅色主题' : '深色主题',
-      icon: appStore.themeMode === 'auto' ? 'icon-park-outline:dark-mode' : appStore.themeMode === 'light' ? 'icon-park-outline:sun-one' : 'icon-park-outline:moon',
+      icon: appStore.themeMode === 'auto' ? 'tabler:device-desktop' : appStore.themeMode === 'light' ? 'tabler:sun' : 'tabler:moon-stars',
       action: 'toggleTheme',
     },
   ]
@@ -26,7 +26,7 @@ const actionButtons = computed(() => {
   if (appStore.isLoggedIn) {
     buttons.push({
       title: '后台管理',
-      icon: 'icon-park-outline:setting',
+      icon: 'tabler:settings',
       action: 'jumpToSetting',
     })
   }

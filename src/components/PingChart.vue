@@ -752,7 +752,7 @@ onBeforeUnmount(() => {
                   >
                     <TooltipTrigger as-child>
                       <Button variant="ghost" size="icon-xs" class="text-slate-500" @click.stop="toggleTaskTooltip(task.id)">
-                        <Icon icon="carbon:information" :width="14" :height="14" />
+                        <Icon icon="tabler:info-circle" :width="14" :height="14" />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent class="!rounded p-3">

@@ -38,23 +38,23 @@ interface InfoItem {
 }
 
 const hardwareInfo = computed<InfoItem[]>(() => [
-  { label: 'CPU', value: data.value ? `${data.value.cpu_name} (x${data.value.cpu_cores})` : '-', icon: 'icon-park-outline:cpu' },
-  { label: '架构', value: data.value?.arch ?? '-', icon: 'icon-park-outline:application-two' },
-  { label: '虚拟化', value: data.value?.virtualization ?? '-', icon: 'icon-park-outline:server' },
-  { label: 'GPU', value: data.value?.gpu_name || '-', icon: 'icon-park-outline:video-one' },
+  { label: 'CPU', value: data.value ? `${data.value.cpu_name} (x${data.value.cpu_cores})` : '-', icon: 'tabler:cpu' },
+  { label: '架构', value: data.value?.arch ?? '-', icon: 'tabler:hierarchy-2' },
+  { label: '虚拟化', value: data.value?.virtualization ?? '-', icon: 'tabler:server' },
+  { label: 'GPU', value: data.value?.gpu_name || '-', icon: 'tabler:device-desktop-analytics' },
 ])
 
 const systemInfo = computed<InfoItem[]>(() => [
-  { label: '操作系统', value: data.value?.os ?? '-', icon: 'icon-park-outline:computer' },
-  { label: '内核版本', value: data.value?.kernel_version ?? '-', icon: 'icon-park-outline:code' },
-  { label: '运行时间', value: formatUptime(data.value?.uptime ?? 0), icon: 'icon-park-outline:timer' },
-  { label: '最后上报', value: formatDateTime(data.value?.time), icon: 'icon-park-outline:time' },
+  { label: '操作系统', value: data.value?.os ?? '-', icon: 'tabler:device-desktop' },
+  { label: '内核版本', value: data.value?.kernel_version ?? '-', icon: 'tabler:code' },
+  { label: '运行时间', value: formatUptime(data.value?.uptime ?? 0), icon: 'tabler:clock' },
+  { label: '最后上报', value: formatDateTime(data.value?.time), icon: 'tabler:clock-up' },
 ])
 
 const storageInfo = computed<InfoItem[]>(() => [
-  { label: '内存', value: formatBytes(data.value?.mem_total ?? 0), icon: 'icon-park-outline:memory' },
-  { label: '内存交换', value: formatBytes(data.value?.swap_total ?? 0), icon: 'icon-park-outline:switch' },
-  { label: '硬盘', value: formatBytes(data.value?.disk_total ?? 0), icon: 'icon-park-outline:hard-disk' },
+  { label: '内存', value: formatBytes(data.value?.mem_total ?? 0), icon: 'tabler:stack-2' },
+  { label: '内存交换', value: formatBytes(data.value?.swap_total ?? 0), icon: 'tabler:arrows-exchange' },
+  { label: '硬盘', value: formatBytes(data.value?.disk_total ?? 0), icon: 'tabler:device-sd-card' },
 ])
 </script>
 
@@ -132,7 +132,7 @@ const storageInfo = computed<InfoItem[]>(() => [
           <div class="gap-2 grid grid-cols-2">
             <div class="flex flex-col gap-1">
               <div class="flex gap-1 items-center text-muted-foreground">
-                <Icon icon="icon-park-outline:transfer-data" :width="14" :height="14" />
+                <Icon icon="tabler:arrows-transfer-up-down" :width="14" :height="14" />
                 <span class="text-xs sm:text-sm">总流量</span>
               </div>
               <span class="text-xs sm:text-sm break-all flex flex-row items-center gap-1">
@@ -145,7 +145,7 @@ const storageInfo = computed<InfoItem[]>(() => [
             </div>
             <div class="flex flex-col gap-1">
               <div class="flex gap-1 items-center text-muted-foreground">
-                <Icon icon="icon-park-outline:dashboard-one" :width="14" :height="14" />
+                <Icon icon="tabler:gauge" :width="14" :height="14" />
                 <span class="text-xs sm:text-sm">网络速率</span>
               </div>
               <span class="text-xs sm:text-sm break-all flex flex-row items-center gap-1">
