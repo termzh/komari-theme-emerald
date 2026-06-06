@@ -40,14 +40,34 @@ const formattedTrafficUp = computed(() => formatBytesSplit(totalTraffic.value.up
 const formattedTrafficDown = computed(() => formatBytesSplit(totalTraffic.value.down, appStore.byteDecimals))
 const formattedSpeedUp = computed(() => formatBytesPerSecondSplit(totalSpeed.value.up, appStore.byteDecimals))
 const formattedSpeedDown = computed(() => formatBytesPerSecondSplit(totalSpeed.value.down, appStore.byteDecimals))
+const topUploadNodes = computed(() => {
+  const topNodes = nodesStore.nodes
+    .filter(node => node.online)
+    .map(node => ({
+      uuid: node.uuid,
+      name: node.name,
+      speed: Math.max(0, node.net_out || 0),
+    }))
+    .sort((a, b) => b.speed - a.speed)
+    .slice(0, 2)
+
+  const maxSpeed = topNodes[0]?.speed ?? 0
+
+  return topNodes.map((node, index) => ({
+    ...node,
+    rank: index + 1,
+    formatted: formatBytesPerSecondSplit(node.speed, appStore.byteDecimals),
+    percentage: maxSpeed > 0 ? Math.max(8, node.speed / maxSpeed * 100) : 0,
+  }))
+})
 
 const showEarth = computed(() => !appStore.hideEarth)
 const wrapperClass = computed(() => showEarth.value
-  ? 'p-4 grid grid-cols-12 gap-2 h-auto md:h-58'
+  ? 'p-4 grid grid-cols-12 gap-2 h-auto'
   : 'p-4')
 const cardGridClass = computed(() => showEarth.value
-  ? 'relative z-9 -mt-40 col-span-12 grid grid-cols-2 gap-2 md:col-span-6 md:row-start-1 md:mt-0 md:h-50 md:self-start'
-  : 'grid grid-cols-2 gap-2 lg:grid-cols-4')
+  ? 'relative z-9 -mt-40 col-span-12 grid grid-cols-2 items-start gap-2 md:col-span-6 md:row-start-1 md:mt-0 md:self-start'
+  : 'grid grid-cols-2 items-start gap-2 lg:grid-cols-4')
 </script>
 
 <template>
@@ -167,6 +187,38 @@ const cardGridClass = computed(() => showEarth.value
           </div>
         </div>
       </CardX>
+
+      <div class="col-span-2 flex min-w-0 flex-col gap-2 rounded-lg bg-background/60 px-3 py-2 shadow-[0_0_0_1px] shadow-slate-500/8 backdrop-blur-md lg:col-span-4 lg:flex-row lg:items-center">
+        <div class="flex shrink-0 items-center gap-1.5 text-[11px] font-medium tracking-wider text-muted-foreground">
+          <Icon icon="tabler:chart-arrows-vertical" :width="14" :height="14" class="text-green-600" />
+          <span>当前上行最高</span>
+        </div>
+        <div v-if="topUploadNodes.length" class="grid min-w-0 flex-1 grid-cols-1 gap-1.5 sm:grid-cols-2">
+          <div
+            v-for="node in topUploadNodes" :key="node.uuid"
+            class="relative min-w-0 overflow-hidden rounded-md bg-green-600/[0.045] px-2 py-1.5 ring-1 ring-inset ring-green-600/10"
+          >
+            <div
+              class="absolute inset-y-0 left-0 bg-green-600/10"
+              :style="{ width: `${node.percentage}%` }"
+            />
+            <div class="relative flex min-w-0 items-center gap-2">
+              <span class="flex size-5 shrink-0 items-center justify-center rounded bg-green-600/10 text-[10px] font-bold text-green-600 tabular-nums">
+                {{ node.rank }}
+              </span>
+              <span class="min-w-0 flex-1 truncate text-xs font-medium text-foreground/85" :title="node.name">
+                {{ node.name }}
+              </span>
+              <span class="shrink-0 text-xs font-bold tracking-tight tabular-nums">
+                {{ node.formatted.value }} <span class="text-[10px] font-medium text-muted-foreground">{{ node.formatted.unit }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+        <div v-else class="min-w-0 rounded-md bg-slate-500/[0.05] px-2 py-1.5 text-xs text-muted-foreground">
+          暂无在线节点
+        </div>
+      </div>
     </div>
   </div>
 </template>
