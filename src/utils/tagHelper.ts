@@ -115,6 +115,9 @@ const EXPIRE_THRESHOLDS = {
 
 const TAG_COLOR_SUFFIX_REGEX = /<(\w+)>$/
 const TAG_COLOR_SUFFIX_REMOVE_REGEX = /<\w+>$/
+const RENEWAL_LINK_PREFIX_REGEX = /^\s*(?:renew|renewal|billing|续费|官网|官方网站)\s*[:=：]\s*/i
+const URL_REGEX = /https?:\/\/[^\s<>"'`，。；、]+/i
+const URL_TRAILING_PUNCTUATION_REGEX = /[)\].,;，。；、]+$/
 
 export interface RenewalDisplaySource {
   price: number
@@ -122,6 +125,9 @@ export interface RenewalDisplaySource {
   auto_renewal?: boolean
   currency: string
   expired_at?: string | number | null
+  public_remark?: string | null
+  remark?: string | null
+  tags?: string | null
 }
 
 export interface RenewalDisplayInfo {
@@ -131,7 +137,9 @@ export interface RenewalDisplayInfo {
   expireLabel: string
   expireText: string
   priceText: string
+  renewalLinkText: string
   renewalModeText: string
+  renewalUrl: string | null
   status: ExpireStatus
   statusLabel: string
 }
@@ -284,6 +292,44 @@ export function getExpireText(expiredAt: string | number | undefined, lang: 'zh-
   return `Expires in ${days} days`
 }
 
+function normalizeExternalUrl(url: string | undefined): string | null {
+  if (!url)
+    return null
+
+  const cleanedUrl = url.trim().replace(URL_TRAILING_PUNCTUATION_REGEX, '')
+  try {
+    const parsedUrl = new URL(cleanedUrl)
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:')
+      return null
+    return parsedUrl.toString()
+  }
+  catch {
+    return null
+  }
+}
+
+function extractUrlFromText(text: string | null | undefined): string | null {
+  if (!text)
+    return null
+
+  const normalizedText = text.replace(RENEWAL_LINK_PREFIX_REGEX, '')
+  return normalizeExternalUrl(normalizedText.match(URL_REGEX)?.[0])
+}
+
+export function isRenewalLinkTag(tag: string): boolean {
+  return Boolean(extractUrlFromText(tag))
+}
+
+export function getRenewalUrlFromSource(source: RenewalDisplaySource): string | null {
+  const tagItems = source.tags?.split(';').map(tag => tag.trim()).filter(Boolean) ?? []
+  const renewalTag = tagItems.find(tag => RENEWAL_LINK_PREFIX_REGEX.test(tag))
+  return extractUrlFromText(renewalTag)
+    ?? extractUrlFromText(source.public_remark)
+    ?? extractUrlFromText(source.remark)
+    ?? tagItems.map(extractUrlFromText).find((url): url is string => Boolean(url))
+    ?? null
+}
+
 export function getRenewalDisplayInfo(
   source: RenewalDisplaySource,
   lang: 'zh-CN' | 'en-US' = 'zh-CN',
@@ -299,6 +345,7 @@ export function getRenewalDisplayInfo(
   const expireDateText = hasExpireDate ? expireDate.format('YYYY-MM-DD') : '-'
   const priceText = formatPriceWithCycle(source.price, source.billing_cycle, source.currency, lang)
   const noRenewalRequired = status === 'long_term' || source.billing_cycle === -1 || source.price === -1
+  const renewalUrl = getRenewalUrlFromSource(source)
 
   if (lang === 'en-US') {
     const statusLabelMap: Record<ExpireStatus, string> = {
@@ -331,7 +378,9 @@ export function getRenewalDisplayInfo(
               ? 'Long-term'
               : `${days} days left`,
       priceText,
+      renewalLinkText: 'Renew',
       renewalModeText: noRenewalRequired ? 'No renewal' : source.auto_renewal ? 'Auto renew' : 'Manual renew',
+      renewalUrl,
       status,
       statusLabel: statusLabelMap[status],
     }
@@ -367,7 +416,9 @@ export function getRenewalDisplayInfo(
             ? '长期有效'
             : `剩余 ${days} 天`,
     priceText,
+    renewalLinkText: '去续费',
     renewalModeText: noRenewalRequired ? '无需续费' : source.auto_renewal ? '自动续费' : '手动续费',
+    renewalUrl,
     status,
     statusLabel: statusLabelMap[status],
   }

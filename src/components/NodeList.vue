@@ -12,7 +12,7 @@ import { useAppStore } from '@/stores/app'
 import { formatBytesPerSecondWithConfig, formatBytesWithConfig, formatDateTime, formatUptimeWithFormat, getStatus } from '@/utils/helper'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getRegionCode, getRegionDisplayName } from '@/utils/regionHelper'
-import { getRenewalDisplayInfo, parseTags } from '@/utils/tagHelper'
+import { getRenewalDisplayInfo, isRenewalLinkTag, parseTags } from '@/utils/tagHelper'
 
 interface ColumnConfig {
   key: string
@@ -205,7 +205,7 @@ function getRenewalTextClass(status: RenewalDisplayInfo['status']): string {
 }
 
 function getCustomTags(node: NodeData): Array<string> {
-  return parseTags(node.tags).map(t => t.text)
+  return parseTags(node.tags).map(t => t.text).filter(tag => !isRenewalLinkTag(tag))
 }
 </script>
 

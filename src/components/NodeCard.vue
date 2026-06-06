@@ -11,7 +11,7 @@ import { useAppStore } from '@/stores/app'
 import { formatBytesPerSecondWithConfig, formatBytesSplit, formatBytesWithConfig, formatDateTime, formatUptimeWithFormat, getStatus } from '@/utils/helper'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getRegionCode, getRegionDisplayName } from '@/utils/regionHelper'
-import { getRenewalDisplayInfo, parseTags } from '@/utils/tagHelper'
+import { getRenewalDisplayInfo, isRenewalLinkTag, parseTags } from '@/utils/tagHelper'
 
 const props = defineProps<{ node: NodeData }>()
 const emit = defineEmits<{
@@ -154,7 +154,7 @@ const subscriptionIcon = computed(() => {
   }
 })
 
-const customTags = computed(() => parseTags(props.node.tags).map(t => t.text))
+const customTags = computed(() => parseTags(props.node.tags).map(t => t.text).filter(tag => !isRenewalLinkTag(tag)))
 
 function hasRegion(region: string | null | undefined): boolean {
   return Boolean(region?.trim())
@@ -293,7 +293,20 @@ function hasRegion(region: string | null | undefined): boolean {
             </div>
           </div>
           <div class="flex shrink-0 flex-col items-end gap-0.5">
-            <span class="rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
+            <a
+              v-if="subscriptionInfo.renewalUrl"
+              :href="subscriptionInfo.renewalUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3"
+              :class="subscriptionActionClass"
+              :aria-label="`${props.node.name} 去官网续费`"
+              @click.stop
+            >
+              <Icon icon="tabler:external-link" :width="11" :height="11" class="shrink-0" />
+              {{ subscriptionInfo.renewalLinkText }}
+            </a>
+            <span v-else class="rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
               {{ subscriptionInfo.actionText }}
             </span>
             <span class="text-[10px] leading-3 text-muted-foreground">
@@ -454,7 +467,20 @@ function hasRegion(region: string | null | undefined): boolean {
                       {{ subscriptionInfo.expireText }}
                     </div>
                   </div>
-                  <span class="shrink-0 rounded-sm px-1.5 py-1 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
+                  <a
+                    v-if="subscriptionInfo.renewalUrl"
+                    :href="subscriptionInfo.renewalUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-[10px] font-semibold leading-3"
+                    :class="subscriptionActionClass"
+                    :aria-label="`${props.node.name} 去官网续费`"
+                    @click.stop
+                  >
+                    <Icon icon="tabler:external-link" :width="11" :height="11" class="shrink-0" />
+                    {{ subscriptionInfo.renewalLinkText }}
+                  </a>
+                  <span v-else class="shrink-0 rounded-sm px-1.5 py-1 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
                     {{ subscriptionInfo.actionText }}
                   </span>
                 </div>
