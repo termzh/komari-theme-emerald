@@ -221,6 +221,7 @@ function hasRegion(region: string | null | undefined): boolean {
     <template #default>
       <div class="flex flex-col">
         <div
+          v-if="!isExpanded"
           class="rounded-md bg-gradient-to-br from-slate-500/[0.07] via-background/35 to-green-600/[0.045] px-2.5 py-2 ring-1 ring-inset ring-slate-500/10"
           :title="machineDetails"
         >
@@ -267,7 +268,7 @@ function hasRegion(region: string | null | undefined): boolean {
         </div>
 
         <div
-          v-if="subscriptionInfo"
+          v-if="subscriptionInfo && !isExpanded"
           class="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
           :class="subscriptionToneClass"
           :title="`${subscriptionInfo.statusLabel} · ${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText} · ${subscriptionInfo.renewalModeText}`"
@@ -303,7 +304,7 @@ function hasRegion(region: string | null | undefined): boolean {
 
         <Transition name="node-card-details">
           <div v-if="isExpanded" class="node-card-details">
-            <div class="flex flex-col gap-2.5 border-t border-slate-500/10 mt-2.5 pt-2.5">
+            <div class="flex flex-col gap-2.5">
               <div class="flex items-center justify-between px-0.5">
                 <div class="flex items-center gap-1.5 text-[11px] font-semibold text-foreground/80">
                   <Icon icon="tabler:adjustments-horizontal" :width="14" :height="14" class="text-green-600" />
