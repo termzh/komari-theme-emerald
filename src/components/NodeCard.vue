@@ -250,7 +250,7 @@ function hasRegion(region: string | null | undefined): boolean {
       <div class="flex flex-col">
         <div
           v-if="!isExpanded"
-          class="rounded-md bg-gradient-to-br from-slate-500/[0.07] via-background/35 to-green-600/[0.045] px-2.5 py-2 ring-1 ring-inset ring-slate-500/10"
+          class="rounded-md bg-slate-500/[0.045] px-2.5 py-2 ring-1 ring-inset ring-slate-500/10"
           :title="machineDetails"
         >
           <div class="min-w-0">
@@ -260,23 +260,27 @@ function hasRegion(region: string | null | undefined): boolean {
                 <span class="shrink-0 font-semibold tabular-nums text-foreground/90">{{ machineSummary }}</span>
                 <span class="min-w-0 truncate text-muted-foreground">{{ cpuDisplayName }}</span>
               </div>
-              <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] leading-4 text-muted-foreground">
+              <div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] leading-4 text-muted-foreground">
                 <span class="inline-flex items-baseline gap-0.5">
                   CPU <strong class="font-semibold text-foreground/80 tabular-nums">{{ (props.node.cpu ?? 0).toFixed(1) }}%</strong>
                 </span>
+                <span class="text-muted-foreground/35" aria-hidden="true">·</span>
                 <span class="inline-flex items-baseline gap-0.5">
                   内存 <strong class="font-semibold text-foreground/80 tabular-nums">{{ memPercentage.toFixed(1) }}%</strong>
                 </span>
+                <span class="text-muted-foreground/35" aria-hidden="true">·</span>
                 <span class="inline-flex items-baseline gap-0.5">
                   硬盘 <strong class="font-semibold text-foreground/80 tabular-nums">{{ diskPercentage.toFixed(1) }}%</strong>
                 </span>
                 <template v-if="props.node.online">
-                  <span class="inline-flex items-center gap-0.5 text-green-600">
-                    <Icon icon="tabler:chevron-up" width="11" height="11" />
+                  <span class="text-muted-foreground/35" aria-hidden="true">·</span>
+                  <span class="inline-flex items-center gap-0.5 text-emerald-600/90 dark:text-emerald-400/90">
+                    <Icon icon="tabler:arrow-up" width="11" height="11" />
                     <strong class="font-semibold tabular-nums">{{ formatBytesPerSecond(props.node.net_out ?? 0) }}</strong>
                   </span>
-                  <span class="inline-flex items-center gap-0.5 text-blue-600">
-                    <Icon icon="tabler:chevron-down" width="11" height="11" />
+                  <span class="text-muted-foreground/35" aria-hidden="true">·</span>
+                  <span class="inline-flex items-center gap-0.5 text-sky-600/90 dark:text-sky-400/90">
+                    <Icon icon="tabler:arrow-down" width="11" height="11" />
                     <strong class="font-semibold tabular-nums">{{ formatBytesPerSecond(props.node.net_in ?? 0) }}</strong>
                   </span>
                 </template>
@@ -286,7 +290,7 @@ function hasRegion(region: string | null | undefined): boolean {
                   <span class="min-w-0 truncate text-muted-foreground">{{ offlineTime }}</span>
                 </span>
               </div>
-              <div v-if="pingTopTaskSummaries.length > 0" class="mt-1.5 overflow-hidden rounded-sm bg-background/45 ring-1 ring-inset ring-slate-500/10">
+              <div v-if="pingTopTaskSummaries.length > 0" class="mt-1.5 overflow-hidden rounded-md bg-background/60 ring-1 ring-inset ring-slate-500/10">
                 <DataTooltip
                   v-for="task in pingTopTaskSummaries"
                   :key="task.key"
@@ -294,11 +298,11 @@ function hasRegion(region: string | null | undefined): boolean {
                   placement="top"
                   :content="task.detailText"
                   content-class="w-64 leading-4"
-                  class="block max-w-full border-t border-slate-500/10 px-1.5 py-1 text-[10px] leading-3 transition-colors first:border-t-0 hover:bg-background/65"
+                  class="block max-w-full border-t border-slate-500/10 px-2 py-1 text-[10px] leading-3 transition-colors first:border-t-0 hover:bg-slate-500/[0.035]"
                 >
                   <div class="flex max-w-full min-w-0 items-center gap-1">
                     <span class="flex min-w-0 items-center gap-1">
-                      <Icon :icon="task.icon" :width="12" :height="12" class="shrink-0" :class="task.textClass" />
+                      <Icon :icon="task.icon" :width="12" :height="12" class="shrink-0" :class="task.hasLoss ? task.textClass : 'text-muted-foreground/65'" />
                       <span class="min-w-0 truncate font-semibold tabular-nums text-foreground/90">{{ task.name }}</span>
                     </span>
                     <span class="shrink-0 text-muted-foreground/45" aria-hidden="true">·</span>
@@ -309,9 +313,15 @@ function hasRegion(region: string | null | undefined): boolean {
                       {{ task.currentText }}
                     </span>
                   </div>
-                  <div class="mt-0.5 grid grid-cols-2 gap-1.5 pl-[17px] text-[9px] leading-3 text-muted-foreground tabular-nums">
-                    <span>{{ task.recentFactText }}</span>
-                    <span>{{ task.hourFactText }}</span>
+                  <div class="mt-0.5 grid grid-cols-2 gap-1.5 pl-[17px] text-[9px] leading-3 tabular-nums">
+                    <span class="text-muted-foreground/75">
+                      近10分钟丢包
+                      <strong class="font-semibold" :class="task.hasRecentLoss ? task.textClass : 'text-muted-foreground'">{{ task.recentText }}</strong>
+                    </span>
+                    <span class="text-muted-foreground/75">
+                      1h丢包
+                      <strong class="font-semibold" :class="task.hasRangeLoss ? task.textClass : 'text-muted-foreground'">{{ task.lossText }}</strong>
+                    </span>
                   </div>
                 </DataTooltip>
               </div>
@@ -334,47 +344,37 @@ function hasRegion(region: string | null | undefined): boolean {
 
         <div
           v-if="subscriptionInfo && !isExpanded"
-          class="mt-1.5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 text-[11px] ring-1 ring-inset"
+          class="mt-1.5 flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] leading-4 ring-1 ring-inset"
           :class="subscriptionToneClass"
           :title="`${subscriptionInfo.statusLabel} · ${subscriptionInfo.expireText} · ${subscriptionInfo.expireLabel} ${subscriptionInfo.expireDateText} · ${subscriptionInfo.priceText}`"
         >
-          <div class="min-w-0">
-            <div class="flex min-w-0 items-center gap-1.5">
-              <span
-                class="shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3 ring-1 ring-inset"
-                :class="subscriptionBadgeClass"
-              >
-                {{ subscriptionInfo.statusLabel }}
-              </span>
-              <Icon :icon="subscriptionIcon" :width="13" :height="13" class="shrink-0" :class="subscriptionStatusClass" />
-              <span class="min-w-0 truncate font-semibold tabular-nums" :class="subscriptionStatusClass">
-                {{ subscriptionInfo.expireText }}
-              </span>
-            </div>
-            <div class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-3 text-muted-foreground tabular-nums">
-              <span class="shrink-0">{{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}</span>
-              <span aria-hidden="true">·</span>
-              <span class="min-w-0 truncate">{{ subscriptionInfo.priceText }}</span>
-            </div>
-          </div>
-          <div class="flex shrink-0 flex-col items-end gap-0.5">
-            <a
-              v-if="subscriptionInfo.renewalUrl"
-              :href="subscriptionInfo.renewalUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3"
-              :class="subscriptionActionClass"
-              :aria-label="`${props.node.name} 去官网续费`"
-              @click.stop
-            >
-              <Icon icon="tabler:external-link" :width="11" :height="11" class="shrink-0" />
-              {{ subscriptionInfo.renewalLinkText }}
-            </a>
-            <span v-else-if="subscriptionInfo.actionText" class="rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
-              {{ subscriptionInfo.actionText }}
-            </span>
-          </div>
+          <Icon :icon="subscriptionIcon" :width="13" :height="13" class="shrink-0" :class="subscriptionStatusClass" />
+          <span class="shrink-0 font-semibold" :class="subscriptionStatusClass">
+            {{ subscriptionInfo.statusLabel }}
+          </span>
+          <span class="min-w-0 truncate font-semibold tabular-nums" :class="subscriptionStatusClass">
+            {{ subscriptionInfo.expireText }}
+          </span>
+          <span class="text-muted-foreground/35" aria-hidden="true">·</span>
+          <span class="min-w-0 truncate text-muted-foreground tabular-nums">
+            {{ subscriptionInfo.expireLabel }} {{ subscriptionInfo.expireDateText }}
+          </span>
+          <a
+            v-if="subscriptionInfo.renewalUrl"
+            :href="subscriptionInfo.renewalUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            :title="subscriptionInfo.renewalLinkText"
+            class="ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-sm"
+            :class="subscriptionActionClass"
+            :aria-label="`${props.node.name} 去官网续费`"
+            @click.stop
+          >
+            <Icon icon="tabler:external-link" :width="11" :height="11" class="shrink-0" />
+          </a>
+          <span v-else-if="subscriptionInfo.actionText" class="ml-auto shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3" :class="subscriptionActionClass">
+            {{ subscriptionInfo.actionText }}
+          </span>
         </div>
 
         <Transition name="node-card-details">
@@ -388,7 +388,7 @@ function hasRegion(region: string | null | undefined): boolean {
                 <span class="min-w-0 truncate text-[10px] text-muted-foreground tabular-nums">{{ machineSummary }}</span>
               </div>
 
-              <div class="rounded-md bg-green-600/[0.045] px-2 py-1.5 ring-1 ring-inset ring-green-600/10">
+              <div class="rounded-md bg-slate-500/[0.045] px-2 py-1.5 ring-1 ring-inset ring-slate-500/10">
                 <div class="flex min-w-0 items-center gap-1.5 text-[11px]">
                   <Icon icon="tabler:cpu" :width="13" :height="13" class="shrink-0 text-green-600" />
                   <span class="shrink-0 font-medium text-muted-foreground">CPU</span>
@@ -487,7 +487,7 @@ function hasRegion(region: string | null | undefined): boolean {
                     <div class="min-w-0">
                       <div class="min-w-0">
                         <div class="flex min-w-0 items-center gap-1.5">
-                          <Icon :icon="task.icon" :width="13" :height="13" class="shrink-0" :class="task.textClass" />
+                          <Icon :icon="task.icon" :width="13" :height="13" class="shrink-0" :class="task.hasLoss ? task.textClass : 'text-muted-foreground/65'" />
                           <span class="min-w-0 truncate font-semibold tabular-nums">{{ task.name }}</span>
                           <span class="shrink-0 text-muted-foreground/45" aria-hidden="true">·</span>
                           <span
@@ -497,12 +497,12 @@ function hasRegion(region: string | null | undefined): boolean {
                             {{ task.currentText }}
                           </span>
                         </div>
-                        <div class="mt-1 grid grid-cols-2 gap-1.5 pl-5 text-[10px] leading-4">
+                        <div class="mt-1 grid grid-cols-2 gap-1.5 pl-5 text-[10px] leading-4 tabular-nums">
                           <div class="min-w-0 truncate text-muted-foreground">
-                            近10分钟记录 <strong class="font-semibold text-foreground/85 tabular-nums">{{ task.recentText }}</strong>
+                            近10分钟丢包 <strong class="font-semibold" :class="task.hasRecentLoss ? task.textClass : 'text-muted-foreground'">{{ task.recentText }}</strong>
                           </div>
                           <div class="min-w-0 truncate text-muted-foreground">
-                            1h记录 <strong class="font-semibold tabular-nums" :class="task.textClass">{{ task.lossText }}</strong>
+                            1h丢包 <strong class="font-semibold" :class="task.hasRangeLoss ? task.textClass : 'text-muted-foreground'">{{ task.lossText }}</strong>
                           </div>
                         </div>
                       </div>

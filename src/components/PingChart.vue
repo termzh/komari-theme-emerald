@@ -892,12 +892,12 @@ onBeforeUnmount(() => {
                           <span class="font-medium">{{ task.latest >= 0 ? `${Math.round(task.latest)} ms` : '丢包' }}</span>
                         </template>
                         <template v-if="task.recentSampleCount !== undefined">
-                          <span class="text-muted-foreground">近10分钟记录</span>
-                          <span class="font-medium">{{ task.recentLostCount }}/{{ task.recentSampleCount }}</span>
+                          <span class="text-muted-foreground">近10分钟丢包</span>
+                          <span class="font-medium">{{ task.recentLostCount }}/{{ task.recentSampleCount }}次</span>
                         </template>
                         <template v-if="task.total !== undefined">
-                          <span class="text-muted-foreground">{{ selectedRangeLabel }}记录</span>
-                          <span class="font-medium">{{ task.lostCount }}/{{ task.total }}</span>
+                          <span class="text-muted-foreground">{{ selectedRangeLabel }}丢包</span>
+                          <span class="font-medium">{{ task.lostCount }}/{{ task.total }}次</span>
                         </template>
                         <template v-if="task.interval !== undefined">
                           <span class="text-muted-foreground">间隔</span>
@@ -921,11 +921,11 @@ onBeforeUnmount(() => {
               {{ formatCurrentValue(task) }}
             </div>
             <div class="col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground tabular-nums">
-              <span title="最近 10 分钟历史记录丢包">
-                近10分钟记录 <strong class="font-semibold text-foreground/85">{{ task.recentLostCount }}/{{ task.recentSampleCount }}</strong>
+              <span title="最近 10 分钟丢包次数 / 实际探测次数">
+                近10分钟丢包 <strong class="font-semibold text-foreground/85">{{ task.recentLostCount }}/{{ task.recentSampleCount }}次</strong>
               </span>
-              <span title="所选时间范围历史记录丢包">
-                {{ selectedRangeLabel }}记录 <strong class="font-semibold text-foreground/85">{{ task.lostCount }}/{{ task.total }}</strong>
+              <span title="所选时间范围丢包次数 / 实际探测次数">
+                {{ selectedRangeLabel }}丢包 <strong class="font-semibold text-foreground/85">{{ task.lostCount }}/{{ task.total }}次</strong>
               </span>
             </div>
           </div>

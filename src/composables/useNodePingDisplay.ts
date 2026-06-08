@@ -36,6 +36,9 @@ export interface NodePingTaskQualitySummary {
   currentText: string
   detailText: string
   factText: string
+  hasLoss: boolean
+  hasRangeLoss: boolean
+  hasRecentLoss: boolean
   hourFactText: string
   icon: string
   key: string
@@ -271,18 +274,6 @@ function compareBestTaskQuality(
     || left.task.avgVolatility - right.task.avgVolatility
 }
 
-function parseDisplayNumber(value: string): number {
-  const parsed = Number.parseFloat(value)
-  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
-}
-
-function compareTopTaskSummary(left: NodePingTaskQualitySummary, right: NodePingTaskQualitySummary): number {
-  return getStatusRank(left.status) - getStatusRank(right.status)
-    || right.score - left.score
-    || parseDisplayNumber(left.lossRateText) - parseDisplayNumber(right.lossRateText)
-    || parseDisplayNumber(left.latencyText) - parseDisplayNumber(right.latencyText)
-}
-
 function formatTaskName(task: NodePingTaskStats, isEnglish: boolean, nameOverride?: string): string {
   const name = nameOverride?.trim() || task.name
   if (!name || name.startsWith('#'))
@@ -310,6 +301,12 @@ function getTaskCurrentLost(task: NodePingTaskStats, latestPing?: NodeStatusPing
   return task.sampleCount > 0 && task.latestLost
 }
 
+function formatLossRecordText(lostCount: number, sampleCount: number, isEnglish: boolean): string {
+  return isEnglish
+    ? `${lostCount}/${sampleCount} probes`
+    : `${lostCount}/${sampleCount}次`
+}
+
 function buildTaskSummary(
   task: NodePingTaskStats,
   lang: 'zh-CN' | 'en-US',
@@ -322,23 +319,28 @@ function buildTaskSummary(
   const name = formatTaskName(task, isEnglish, nameOverride)
   const latency = task.recentSuccessCount > 0 ? task.recentAvgLatency : task.avgLatency
   const latencyText = task.successCount > 0 ? `${Math.round(latency)}ms` : '-'
-  const lossText = `${task.lostCount}/${task.sampleCount}`
-  const recentText = `${task.recentLostCount}/${task.recentSampleCount}`
-  const recentFactText = isEnglish ? `10 min rec ${recentText}` : `近10分钟记录 ${recentText}`
-  const hourFactText = isEnglish ? `1h rec ${lossText}` : `1h记录 ${lossText}`
+  const lossText = formatLossRecordText(task.lostCount, task.sampleCount, isEnglish)
+  const recentText = formatLossRecordText(task.recentLostCount, task.recentSampleCount, isEnglish)
+  const recentFactText = isEnglish ? `10 min loss ${recentText}` : `近10分钟丢包 ${recentText}`
+  const hourFactText = isEnglish ? `1h loss ${lossText}` : `1h丢包 ${lossText}`
   const factText = `${recentFactText} · ${hourFactText}`
   const lossRateText = `${task.avgLoss.toFixed(1)}%`
   const currentText = getTaskCurrentText(task, isEnglish, latestPing)
   const currentLost = getTaskCurrentLost(task, latestPing)
+  const hasRecentLoss = task.recentLostCount > 0
+  const hasRangeLoss = task.lostCount > 0
   const detailText = isEnglish
-    ? `${name}: ${currentText}, 10-min record loss ${recentText}, 1h record loss ${lossText}`
-    : `${name}：${currentText}，近10分钟记录丢包 ${recentText}，1小时记录丢包 ${lossText}`
+    ? `${name}: ${currentText}, 10-min loss ${recentText}, 1h loss ${lossText}`
+    : `${name}：${currentText}，近10分钟丢包 ${recentText}，1小时丢包 ${lossText}`
 
   return {
     currentLost,
     currentText,
     detailText,
     factText,
+    hasLoss: currentLost || hasRecentLoss || hasRangeLoss,
+    hasRangeLoss,
+    hasRecentLoss,
     hourFactText,
     icon: tone.icon,
     key: String(task.taskId),
@@ -567,7 +569,6 @@ export function useNodePingDisplay(
         taskNameOverrides.value.get(task.taskId),
         latestPingSummaries.value?.[String(task.taskId)],
       ))
-      .sort(compareTopTaskSummary)
   })
 
   const topTaskSummaries = computed(() => taskQualitySummaries.value.slice(0, 3))

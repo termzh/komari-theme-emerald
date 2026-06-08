@@ -19,6 +19,7 @@ export interface NodePingTaskStats {
   lostCount: number
   maxConsecutiveLost: number
   name: string
+  order: number
   recentAvgLatency: number
   recentLostCount: number
   recentLoss: number
@@ -55,11 +56,20 @@ interface PingRecord {
 
 interface SharedPingRecordsResponse {
   records?: PingRecord[]
+  tasks?: PingTaskInfo[]
+}
+
+interface PingTaskInfo {
+  id: number
+  interval?: number
+  name: string
 }
 
 interface SharedPingRecordsState {
   recordsByClient: Map<string, PingRecord[]>
+  taskNamesById: Map<number, string>
   taskNamesByClient: Map<string, Map<number, string>>
+  taskOrder: number[]
 }
 
 interface SharedPingRecordsEntry {
@@ -70,7 +80,7 @@ interface SharedPingRecordsEntry {
 }
 
 const HISTORY_BUCKET_COUNT = 20
-const CACHE_VERSION = 11
+const CACHE_VERSION = 12
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
 const RECENT_WINDOW_MS = 10 * 60 * 1000
@@ -139,6 +149,7 @@ function isValidTaskStats(value: unknown): value is NodePingTaskStats {
     && typeof task.lostCount === 'number'
     && typeof task.maxConsecutiveLost === 'number'
     && typeof task.name === 'string'
+    && typeof task.order === 'number'
     && typeof task.recentAvgLatency === 'number'
     && typeof task.recentLostCount === 'number'
     && typeof task.recentLoss === 'number'
@@ -250,6 +261,27 @@ function buildRecordsByClient(records: PingRecord[]): Map<string, PingRecord[]> 
   return grouped
 }
 
+function buildTaskMeta(tasks: PingTaskInfo[] | undefined): { names: Map<number, string>, order: number[] } {
+  const names = new Map<number, string>()
+  const order: number[] = []
+  const seen = new Set<number>()
+
+  for (const task of tasks ?? []) {
+    const taskId = Number(task.id)
+    if (!Number.isFinite(taskId) || seen.has(taskId))
+      continue
+
+    seen.add(taskId)
+    order.push(taskId)
+
+    const taskName = task.name?.trim()
+    if (taskName)
+      names.set(taskId, taskName)
+  }
+
+  return { names, order }
+}
+
 async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: number): Promise<void> {
   if (entry.promise)
     return entry.promise
@@ -264,10 +296,13 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
         type: 'ping',
         hours,
       })
+      const taskMeta = buildTaskMeta(result?.tasks)
 
       entry.data.value = {
         recordsByClient: buildRecordsByClient(result?.records ?? []),
+        taskNamesById: taskMeta.names,
         taskNamesByClient: cloneTaskNamesByClient(),
+        taskOrder: taskMeta.order,
       }
     }
     catch (err) {
@@ -339,7 +374,12 @@ export function ingestLatestPing(statuses: Record<string, NodeStatus>): void {
   if (!mergeLatestTaskNames(taskNamesByClient))
     return
 
-  entry.data.value = { recordsByClient: entry.data.value.recordsByClient, taskNamesByClient }
+  entry.data.value = {
+    recordsByClient: entry.data.value.recordsByClient,
+    taskNamesById: entry.data.value.taskNamesById,
+    taskNamesByClient,
+    taskOrder: entry.data.value.taskOrder,
+  }
 }
 
 function buildPingHistory(records: PingRecord[]): NodePingHistoryPoint[] {
@@ -469,7 +509,11 @@ function getMaxRollingLostCount(records: PingRecord[], windowSize: number): numb
   return maxLost
 }
 
-function buildStats(records: PingRecord[], taskNames: Map<number, string> = new Map()): NodePingStatsState {
+function buildStats(
+  records: PingRecord[],
+  taskNames: Map<number, string> = new Map(),
+  taskOrder: number[] = [],
+): NodePingStatsState {
   const includedTaskIds = getIncludedTaskIds(records)
 
   if (!includedTaskIds.size)
@@ -489,6 +533,7 @@ function buildStats(records: PingRecord[], taskNames: Map<number, string> = new 
   const taskLossValues: number[] = []
   const volatilityValues: number[] = []
   const tasks: NodePingTaskStats[] = []
+  const taskOrderIndex = new Map(taskOrder.map((taskId, index) => [taskId, index]))
   let affectedTaskCount = 0
   let lostCount = 0
 
@@ -531,6 +576,7 @@ function buildStats(records: PingRecord[], taskNames: Map<number, string> = new 
         lostCount: taskLostCount,
         maxConsecutiveLost,
         name: taskNames.get(taskId) ?? `#${taskId}`,
+        order: taskOrderIndex.get(taskId) ?? Number.MAX_SAFE_INTEGER,
         recentAvgLatency: 0,
         recentLostCount,
         recentLoss,
@@ -568,6 +614,7 @@ function buildStats(records: PingRecord[], taskNames: Map<number, string> = new 
       lostCount: taskLostCount,
       maxConsecutiveLost,
       name: taskNames.get(taskId) ?? `#${taskId}`,
+      order: taskOrderIndex.get(taskId) ?? Number.MAX_SAFE_INTEGER,
       recentAvgLatency: recentTaskLatency,
       recentLostCount,
       recentLoss,
@@ -605,7 +652,7 @@ function buildStats(records: PingRecord[], taskNames: Map<number, string> = new 
     sampleCount: filteredRecords.length,
     successCount: filteredRecords.length - lostCount,
     taskCount: taskRecords.size,
-    tasks: tasks.sort((left, right) => left.taskId - right.taskId),
+    tasks: tasks.sort((left, right) => left.order - right.order || left.taskId - right.taskId),
   }
 }
 
@@ -639,8 +686,11 @@ export function useNodePingStats(
       return readStatsCache(nodeUuid, hours) ?? createEmptyStats()
 
     const records = state.recordsByClient.get(nodeUuid) ?? []
-    const taskNames = state.taskNamesByClient.get(nodeUuid) ?? new Map()
-    return records.length ? buildStats(records, taskNames) : createEmptyStats()
+    const taskNames = new Map(state.taskNamesById)
+    for (const [taskId, name] of state.taskNamesByClient.get(nodeUuid) ?? new Map())
+      taskNames.set(taskId, name)
+
+    return records.length ? buildStats(records, taskNames, state.taskOrder) : createEmptyStats()
   })
 
   // 副作用：按需触发首次共享加载并维护 loading/error，不再命令式写入 stats。
