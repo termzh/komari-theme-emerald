@@ -1,5 +1,6 @@
 import type { MaybeRefOrGetter } from 'vue'
 import type { NodePingTaskStats } from '@/composables/useNodePingStats'
+import type { NodeStatusPing } from '@/utils/rpc'
 import { computed, toValue } from 'vue'
 import { useNodePingStats } from '@/composables/useNodePingStats'
 import { useAppStore } from '@/stores/app'
@@ -31,7 +32,8 @@ export interface NodePingQualitySummary {
 }
 
 export interface NodePingTaskQualitySummary {
-  basisText: string
+  currentLost: boolean
+  currentText: string
   detailText: string
   factText: string
   hourFactText: string
@@ -39,18 +41,15 @@ export interface NodePingTaskQualitySummary {
   key: string
   label: string
   latencyText: string
-  lossPatternText: string
   lossRateText: string
   lossText: string
   name: string
   recentFactText: string
   recentText: string
-  sampleText: string
   score: number
   status: NodePingQualityStatus
   textClass: string
   toneClass: string
-  volatilityText: string
 }
 
 interface UseNodePingDisplayOptions {
@@ -58,6 +57,7 @@ interface UseNodePingDisplayOptions {
   emptyDisplayText?: string
   loadingPanelTooltipText?: Partial<Record<NodePingMetric, string>>
   emptyPanelTooltipText?: Partial<Record<NodePingMetric, string>>
+  latestPing?: MaybeRefOrGetter<Record<string, NodeStatusPing> | undefined>
   taskNameOverrides?: MaybeRefOrGetter<Map<number, string> | Record<string, string> | undefined>
 }
 
@@ -134,7 +134,7 @@ function getQualityLabel(status: NodePingQualityStatus, lang: 'zh-CN' | 'en-US')
       excellent: 'Stable',
       good: 'Good',
       high_latency: 'High RTT',
-      warning: 'Noisy',
+      warning: 'Records',
       critical: 'Alert',
       unknown: 'Unknown',
     }
@@ -145,7 +145,7 @@ function getQualityLabel(status: NodePingQualityStatus, lang: 'zh-CN' | 'en-US')
     excellent: '稳定',
     good: '良好',
     high_latency: '高延迟',
-    warning: '波动',
+    warning: '记录',
     critical: '异常',
     unknown: '未知',
   }
@@ -290,57 +290,32 @@ function formatTaskName(task: NodePingTaskStats, isEnglish: boolean, nameOverrid
   return name
 }
 
-function getLossPatternText(task: NodePingTaskStats, isEnglish: boolean): string {
-  if (task.trailingLostCount >= 2)
-    return isEnglish ? 'currently consecutive' : '当前连续'
-  if (task.recentMaxConsecutiveLost >= 2)
-    return isEnglish ? 'recent consecutive' : '近10分连续'
-  if (task.recentMaxRollingLostCount >= 2)
-    return isEnglish ? 'recent cluster' : '近10分集中'
-  if (task.lostCount >= 3)
-    return isEnglish ? 'scattered often' : '1h多次'
-  if (task.lostCount > 0)
-    return isEnglish ? 'scattered' : '零散'
-  return isEnglish ? 'clean' : '无丢包'
+function getTaskCurrentText(task: NodePingTaskStats, isEnglish: boolean, latestPing?: NodeStatusPing): string {
+  if (latestPing && typeof latestPing.latest === 'number') {
+    if (latestPing.latest < 0)
+      return isEnglish ? 'now lost' : '当前丢包'
+    return isEnglish ? `now ${Math.round(latestPing.latest)}ms` : `当前 ${Math.round(latestPing.latest)}ms`
+  }
+
+  if (!task.sampleCount)
+    return isEnglish ? 'now -' : '当前 -'
+  if (task.latestLost)
+    return isEnglish ? 'now lost' : '当前丢包'
+  return isEnglish ? `now ${Math.round(task.latestLatency)}ms` : `当前 ${Math.round(task.latestLatency)}ms`
 }
 
-function getTaskBasisText(
+function getTaskCurrentLost(task: NodePingTaskStats, latestPing?: NodeStatusPing): boolean {
+  if (latestPing && typeof latestPing.latest === 'number')
+    return latestPing.latest < 0
+  return task.sampleCount > 0 && task.latestLost
+}
+
+function buildTaskSummary(
   task: NodePingTaskStats,
-  status: NodePingQualityStatus,
-  latencyText: string,
-  volatilityText: string,
-  isEnglish: boolean,
-): string {
-  if (task.successCount <= 0)
-    return isEnglish ? 'no successful samples' : '无成功样本'
-  if (task.trailingLostCount >= 3)
-    return isEnglish ? 'current 3+ consecutive losses' : '当前连续丢包≥3次'
-  if (task.recentMaxConsecutiveLost >= 3)
-    return isEnglish ? 'recent 3+ consecutive losses' : '近10分连续丢包≥3次'
-  if (task.recentLostCount >= 4)
-    return isEnglish ? 'recent losses are high' : '近10分丢包偏多'
-  if (task.lostCount >= 8 || task.avgLoss >= 10)
-    return isEnglish ? '1h loss is high' : '1h丢包偏多'
-  if (task.trailingLostCount >= 2)
-    return isEnglish ? 'current consecutive loss' : '当前连续丢包'
-  if (task.recentMaxConsecutiveLost >= 2)
-    return isEnglish ? 'recent consecutive loss' : '近10分连续丢包'
-  if (task.recentMaxRollingLostCount >= 2 || task.recentLostCount >= 2)
-    return isEnglish ? 'recent concentrated loss' : '近10分丢包集中'
-  if (task.lostCount >= 3 || task.avgLoss >= 5)
-    return isEnglish ? 'multiple scattered losses in 1h' : '1h零散丢包偏多'
-  if (task.avgVolatility >= 2)
-    return isEnglish ? `jitter ${volatilityText}` : `延迟抖动 ${volatilityText}`
-  if (status === 'high_latency')
-    return isEnglish ? `latency ${latencyText}` : `延迟偏高 ${latencyText}`
-  if (task.lostCount > 0)
-    return isEnglish ? 'minor scattered loss' : '少量零散丢包'
-  if (status === 'excellent')
-    return isEnglish ? 'no loss, low latency' : '无丢包且延迟低'
-  return isEnglish ? 'no recent pressure' : '近期无明显压力'
-}
-
-function buildTaskSummary(task: NodePingTaskStats, lang: 'zh-CN' | 'en-US', nameOverride?: string): NodePingTaskQualitySummary {
+  lang: 'zh-CN' | 'en-US',
+  nameOverride?: string,
+  latestPing?: NodeStatusPing,
+): NodePingTaskQualitySummary {
   const isEnglish = lang === 'en-US'
   const evaluation = evaluateTaskQuality(task)
   const tone = getQualityTone(evaluation.status)
@@ -349,19 +324,19 @@ function buildTaskSummary(task: NodePingTaskStats, lang: 'zh-CN' | 'en-US', name
   const latencyText = task.successCount > 0 ? `${Math.round(latency)}ms` : '-'
   const lossText = `${task.lostCount}/${task.sampleCount}`
   const recentText = `${task.recentLostCount}/${task.recentSampleCount}`
-  const recentFactText = isEnglish ? `10m ${recentText}` : `近10分 ${recentText}`
-  const hourFactText = isEnglish ? `1h ${lossText}` : `1h ${lossText}`
+  const recentFactText = isEnglish ? `10 min rec ${recentText}` : `近10分钟记录 ${recentText}`
+  const hourFactText = isEnglish ? `1h rec ${lossText}` : `1h记录 ${lossText}`
   const factText = `${recentFactText} · ${hourFactText}`
-  const lossPatternText = getLossPatternText(task, isEnglish)
   const lossRateText = `${task.avgLoss.toFixed(1)}%`
-  const volatilityText = task.avgVolatility > 0 ? `${task.avgVolatility.toFixed(2)}x` : '-'
-  const basisText = getTaskBasisText(task, evaluation.status, latencyText, volatilityText, isEnglish)
+  const currentText = getTaskCurrentText(task, isEnglish, latestPing)
+  const currentLost = getTaskCurrentLost(task, latestPing)
   const detailText = isEnglish
-    ? `${name}: ${basisText}; 10m loss ${recentText}, 1h loss ${lossText} (${lossRateText}), avg ${latencyText}, jitter ${volatilityText}`
-    : `${name}：${basisText}；近10分钟丢包 ${recentText}，1小时丢包 ${lossText}（${lossRateText}），平均延迟 ${latencyText}，抖动 ${volatilityText}`
+    ? `${name}: ${currentText}, 10-min record loss ${recentText}, 1h record loss ${lossText}`
+    : `${name}：${currentText}，近10分钟记录丢包 ${recentText}，1小时记录丢包 ${lossText}`
 
   return {
-    basisText,
+    currentLost,
+    currentText,
     detailText,
     factText,
     hourFactText,
@@ -369,18 +344,15 @@ function buildTaskSummary(task: NodePingTaskStats, lang: 'zh-CN' | 'en-US', name
     key: String(task.taskId),
     label: getQualityLabel(evaluation.status, lang),
     latencyText,
-    lossPatternText,
     lossRateText,
     lossText,
     name,
     recentFactText,
     recentText,
-    sampleText: `${task.successCount}/${task.sampleCount}`,
     score: evaluation.score,
     status: evaluation.status,
     textClass: tone.textClass,
     toneClass: tone.toneClass,
-    volatilityText,
   }
 }
 
@@ -423,6 +395,8 @@ export function useNodePingDisplay(
     }
     return overrides
   })
+
+  const latestPingSummaries = computed(() => toValue(options.latestPing))
 
   function buildPingBars(metric: NodePingMetric): NodePingBar[] {
     const points = pingStats.history.value
@@ -507,10 +481,7 @@ export function useNodePingDisplay(
       return options.emptyPanelTooltipText?.loss ?? ''
     }
 
-    const volatility = pingStats.avgVolatility.value > 0
-      ? `，平均波动 ${pingStats.avgVolatility.value.toFixed(2)}`
-      : ''
-    return `平均丢包 ${pingStats.avgLoss.value.toFixed(1)}%${volatility}`
+    return `平均丢包 ${pingStats.avgLoss.value.toFixed(1)}%`
   })
 
   const qualitySummary = computed<NodePingQualitySummary>(() => {
@@ -569,12 +540,9 @@ export function useNodePingDisplay(
     const monitorText = taskCount > 0
       ? (isEnglish ? `${taskCount} probes` : `${taskCount}个监测点`)
       : '-'
-    const volatilityText = bestTask?.avgVolatility
-      ? (isEnglish ? `, jitter ${bestTask.avgVolatility.toFixed(2)}x` : `，波动 ${bestTask.avgVolatility.toFixed(2)}x`)
-      : ''
     const detailText = isEnglish
-      ? `Showing best probe: ${bestTaskText}, ${lostText} (${lossRateText}), avg ${latencyText}${volatilityText}; ${availableText}`
-      : `按最佳监测点展示：${bestTaskText}，${lostText}（${lossRateText}），平均延迟 ${latencyText}${volatilityText}；${availableText}`
+      ? `Showing best probe: ${bestTaskText}, ${lostText} (${lossRateText}), avg ${latencyText}; ${availableText}`
+      : `按最佳监测点展示：${bestTaskText}，${lostText}（${lossRateText}），平均延迟 ${latencyText}；${availableText}`
 
     return {
       availableText,
@@ -593,7 +561,12 @@ export function useNodePingDisplay(
 
   const taskQualitySummaries = computed(() => {
     return pingStats.tasks.value
-      .map(task => buildTaskSummary(task, appStore.lang, taskNameOverrides.value.get(task.taskId)))
+      .map(task => buildTaskSummary(
+        task,
+        appStore.lang,
+        taskNameOverrides.value.get(task.taskId),
+        latestPingSummaries.value?.[String(task.taskId)],
+      ))
       .sort(compareTopTaskSummary)
   })
 

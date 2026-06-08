@@ -16,15 +16,9 @@ const emit = defineEmits<{
 const PingChart = defineAsyncComponent(() => import('@/components/PingChart.vue'))
 const CHART_RENDER_DELAY_MS = 220
 const shouldRenderChart = ref(false)
-let chartRenderFrame: number | null = null
 let chartRenderTimer: ReturnType<typeof setTimeout> | null = null
 
 function clearScheduledChartRender() {
-  if (chartRenderFrame !== null) {
-    window.cancelAnimationFrame(chartRenderFrame)
-    chartRenderFrame = null
-  }
-
   if (chartRenderTimer !== null) {
     window.clearTimeout(chartRenderTimer)
     chartRenderTimer = null
@@ -42,15 +36,11 @@ function scheduleChartRender(open: boolean) {
     if (!props.open)
       return
 
-    chartRenderFrame = window.requestAnimationFrame(() => {
-      chartRenderFrame = null
-      chartRenderTimer = window.setTimeout(() => {
-        chartRenderTimer = null
-        if (props.open) {
-          shouldRenderChart.value = true
-        }
-      }, CHART_RENDER_DELAY_MS)
-    })
+    chartRenderTimer = window.setTimeout(() => {
+      chartRenderTimer = null
+      if (props.open)
+        shouldRenderChart.value = true
+    }, CHART_RENDER_DELAY_MS)
   })
 }
 
@@ -77,7 +67,7 @@ onBeforeUnmount(() => {
         </DialogDescription>
       </div>
       <div class="p-4 sm:p-6">
-        <PingChart v-if="shouldRenderChart" :uuid="node.uuid" />
+        <PingChart v-if="shouldRenderChart" :uuid="node.uuid" :latest-ping="node.ping" />
         <div v-else class="h-80 rounded-md bg-background/50">
           <Spinner class="h-full" content-class="bg-transparent backdrop-blur-0" />
         </div>

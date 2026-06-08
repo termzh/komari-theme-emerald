@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { NodeStatusPing } from '@/utils/rpc'
 import { Icon } from '@iconify/vue'
 import dayjs from 'dayjs'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
@@ -13,6 +14,7 @@ import { getSharedRpc } from '@/utils/rpc'
 import '@/utils/echarts' // 共享 ECharts 配置
 
 const props = defineProps<{
+  latestPing?: Record<string, NodeStatusPing>
   uuid: string
 }>()
 
@@ -45,8 +47,9 @@ const chartColors = [
   '#FB923C', // 橙色
 ]
 const packetLossColor = '#FACC15'
-const packetLossSeriesName = '丢包率'
+const packetLossSeriesName = '丢包事件'
 const tooltipEscapedCharsRegex = /[&<>"']/g
+const RECENT_WINDOW_MS = 10 * 60 * 1000
 
 // 从 publicSettings 获取记录保留时间
 const maxPingRecordPreserveTime = computed(() => appStore.publicSettings?.ping_record_preserve_time || 168)
@@ -93,6 +96,7 @@ const selectedHours = computed(() => {
   const view = availableViews.value.find(v => v.label === selectedView.value)
   return view?.hours || 1
 })
+const selectedRangeLabel = computed(() => selectedView.value || '1 小时')
 
 // 初始化默认视图
 watch(availableViews, (views) => {
@@ -138,12 +142,17 @@ interface PingRecordsResponse {
 interface RawTaskStats {
   avg?: number
   latest?: number
+  lostCount: number
   loss: number
   max?: number
   min?: number
   p50?: number
   p99?: number
   p99_p50_ratio?: number
+  recentLostCount: number
+  recentMaxConsecutiveLost: number
+  recentSampleCount: number
+  trailingLostCount: number
   total: number
 }
 
@@ -159,7 +168,8 @@ const isDefaultAllTasks = ref(true)
 const isTouchTooltipMode = ref(false)
 const activeTaskTooltipId = ref<number | null>(null)
 
-const chartMargin = { top: 30, right: 58, bottom: 52, left: 56 }
+const latencyChartGrid = { top: 28, right: 16, bottom: 82, left: 50 }
+const lossEventGrid = { right: 16, bottom: 44, left: 50, height: 18 }
 let coarsePointerMediaQuery: MediaQueryList | null = null
 
 function syncTouchTooltipMode() {
@@ -275,7 +285,6 @@ const mergedData = computed(() => {
 
     const group = grouped.get(useTs)!
     const isLost = rec.value < 0
-    // 丢包只进入右轴峰值；延迟序列必须保留 null，不能伪造延迟值。
     group[rec.task_id] = isLost ? null : rec.value
     group[getPacketLossKey(rec.task_id)] = isLost ? 100 : 0
   }
@@ -326,7 +335,7 @@ function getPacketLossKey(taskId: number): string {
   return `${taskId}:packet-loss`
 }
 
-function getPacketLossRate(row: Record<string, unknown>, taskList: TaskInfo[]): number | null {
+function getPacketLossInfo(row: Record<string, unknown>, taskList: TaskInfo[]): { lostCount: number, observedCount: number, rate: number } | null {
   let observedCount = 0
   let lostCount = 0
 
@@ -340,7 +349,9 @@ function getPacketLossRate(row: Record<string, unknown>, taskList: TaskInfo[]): 
       lostCount += 1
   }
 
-  return observedCount > 0 ? lostCount / observedCount * 100 : null
+  return observedCount > 0
+    ? { lostCount, observedCount, rate: lostCount / observedCount * 100 }
+    : null
 }
 
 function escapeTooltipText(value: string): string {
@@ -379,6 +390,74 @@ function getPercentile(values: number[], percentile: number): number | undefined
   return lowerValue + (upperValue - lowerValue) * (position - lowerIndex)
 }
 
+function countLost(records: PingRecord[]): number {
+  return records.filter(record => record.value < 0).length
+}
+
+function getMaxConsecutiveLost(records: PingRecord[]): number {
+  let maxLost = 0
+  let currentLost = 0
+
+  for (const record of records) {
+    if (record.value < 0) {
+      currentLost += 1
+      maxLost = Math.max(maxLost, currentLost)
+    }
+    else {
+      currentLost = 0
+    }
+  }
+
+  return maxLost
+}
+
+function getTrailingLostCount(records: PingRecord[]): number {
+  let count = 0
+
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]
+    if (!record || record.value >= 0)
+      break
+    count += 1
+  }
+
+  return count
+}
+
+function getRecordTimestamp(record: PingRecord): number {
+  const timestamp = dayjs(record.time).valueOf()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function getRecentRecords(records: PingRecord[]): PingRecord[] {
+  const latestRecord = records.at(-1)
+  if (!latestRecord)
+    return []
+
+  const latestTimestamp = getRecordTimestamp(latestRecord)
+  if (latestTimestamp <= 0)
+    return []
+
+  const startTime = latestTimestamp - RECENT_WINDOW_MS
+  return records.filter((record) => {
+    const timestamp = getRecordTimestamp(record)
+    return timestamp > startTime && timestamp <= latestTimestamp
+  })
+}
+
+function formatCurrentValue(task: RawTaskStats): string {
+  if (task.latest === undefined)
+    return '-'
+  if (task.latest < 0)
+    return '当前丢包'
+  return `当前 ${Math.round(task.latest)}ms`
+}
+
+function getLatestPingValue(taskId: number, fallback?: number): number | undefined {
+  const latest = props.latestPing?.[String(taskId)]?.latest
+  return typeof latest === 'number' ? latest : fallback
+}
+
 const showDateInAxis = computed(() => selectedHours.value >= 24)
 
 // ==================== 任务选择 ====================
@@ -402,17 +481,21 @@ const rawTaskStats = computed(() => {
   return new Map(
     tasks.value.map((task) => {
       const records = recordsByTask.get(task.id) ?? []
+      const recentRecords = getRecentRecords(records)
       const successfulValues = records
         .map(record => record.value)
         .filter(value => value >= 0)
+      const lostCount = records.length - successfulValues.length
+      const recentLostCount = countLost(recentRecords)
       const p50 = getPercentile(successfulValues, 0.5)
       const p99 = getPercentile(successfulValues, 0.99)
 
       return [task.id, {
         avg: getAverage(successfulValues),
         latest: records.at(-1)?.value,
+        lostCount,
         loss: records.length > 0
-          ? (records.length - successfulValues.length) / records.length * 100
+          ? lostCount / records.length * 100
           : 0,
         max: successfulValues.length ? Math.max(...successfulValues) : undefined,
         min: successfulValues.length ? Math.min(...successfulValues) : undefined,
@@ -421,6 +504,10 @@ const rawTaskStats = computed(() => {
         p99_p50_ratio: p50 !== undefined && p99 !== undefined && p50 > 0
           ? p99 / p50
           : undefined,
+        recentLostCount,
+        recentMaxConsecutiveLost: getMaxConsecutiveLost(recentRecords),
+        recentSampleCount: recentRecords.length,
+        trailingLostCount: getTrailingLostCount(records),
         total: records.length,
       } satisfies RawTaskStats]
     }),
@@ -434,10 +521,22 @@ const latestValues = computed(() => {
 
   return tasks.value.map((task, idx) => {
     const safeIdx = Math.max(0, idx % chartColors.length)
+    const stats = rawTaskStats.value.get(task.id) ?? {
+      latest: undefined,
+      lostCount: 0,
+      loss: 0,
+      recentLostCount: 0,
+      recentMaxConsecutiveLost: 0,
+      recentSampleCount: 0,
+      total: 0,
+      trailingLostCount: 0,
+    } satisfies RawTaskStats
+
     return {
       ...task,
-      ...rawTaskStats.value.get(task.id),
+      ...stats,
       color: chartColors[safeIdx]!,
+      latest: getLatestPingValue(task.id, stats.latest),
     }
   })
 })
@@ -514,18 +613,22 @@ const pingChartOption = computed(() => {
   const data = mergedData.value
   const hours = selectedHours.value
 
-  const packetLossData = data.map(row => getPacketLossRate(row, taskList))
+  const packetLossData = data.map((row) => {
+    const packetLoss = getPacketLossInfo(row, taskList)
+    return packetLoss && packetLoss.lostCount > 0 ? 1 : null
+  })
   const delaySeries = taskList.map((task) => {
     const color = getTaskColor(task.id)
     return {
       name: task.name,
       type: 'line' as const,
       data: data.map(d => (d[task.id] as number | null | undefined) ?? null),
+      xAxisIndex: 0,
       yAxisIndex: 0,
       smooth: false,
       showSymbol: false,
-      // 仅由图表跨过 null 做视觉连接，原始失败点仍然没有延迟值。
-      connectNulls: true,
+      // 丢包点必须断线；否则视觉上会把一次失败伪装成连续可达。
+      connectNulls: false,
       lineStyle: { width: 1.5, color, cap: 'round' as const },
       itemStyle: { color }, // 确保 symbol 颜色一致
       z: 2,
@@ -535,19 +638,25 @@ const pingChartOption = computed(() => {
     name: packetLossSeriesName,
     type: 'bar' as const,
     data: packetLossData,
+    xAxisIndex: 1,
     yAxisIndex: 1,
-    barMaxWidth: 8,
-    itemStyle: { color: packetLossColor, opacity: 0.55, borderRadius: [2, 2, 0, 0] },
-    z: 1,
+    barMaxWidth: 4,
+    barMinHeight: 12,
+    itemStyle: { color: packetLossColor, opacity: 0.72, borderRadius: [2, 2, 2, 2] },
+    tooltip: { show: false },
+    z: 3,
   }
 
   return {
     animation: false,
     // 全局颜色设置（用于图例等）
-    color: tasks.value.map((_, idx) => {
-      const safeIdx = Math.max(0, idx % chartColors.length)
-      return chartColors[safeIdx]!
-    }),
+    color: [
+      ...tasks.value.map((_, idx) => {
+        const safeIdx = Math.max(0, idx % chartColors.length)
+        return chartColors[safeIdx]!
+      }),
+      packetLossColor,
+    ],
     tooltip: {
       ...baseTooltipConfig.value,
       formatter: (params: unknown) => {
@@ -566,10 +675,10 @@ const pingChartOption = computed(() => {
         let html = `<div style="font-weight:600;margin-bottom:6px;color:${chartThemeColors.value.textSecondary}">${timeStr}</div>`
         html += '<div style="display:flex;flex-direction:column;gap:4px">'
 
-        const packetLoss = getPacketLossRate(rowData, taskList)
+        const packetLoss = getPacketLossInfo(rowData, taskList)
         if (packetLoss !== null) {
           const lossDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${packetLossColor};margin-right:8px;flex-shrink:0"></span>`
-          html += `<div style="display:flex;align-items:center">${lossDot}<span style="flex:1">丢包率</span><span style="margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums">${packetLoss.toFixed(2)}%</span></div>`
+          html += `<div style="display:flex;align-items:center">${lossDot}<span style="flex:1">丢包事件</span><span style="margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums">${packetLoss.lostCount}/${packetLoss.observedCount} (${packetLoss.rate.toFixed(2)}%)</span></div>`
         }
 
         const taskRows = taskList
@@ -608,28 +717,44 @@ const pingChartOption = computed(() => {
       itemGap: 16,
       icon: 'roundRect',
       textStyle: { fontSize: 11, color: chartThemeColors.value.textSecondary },
-      data: taskList.map(t => t.name),
+      data: [...taskList.map(t => t.name), packetLossSeriesName],
     },
-    grid: chartMargin,
-    xAxis: {
-      type: 'category',
-      data: data.map(d => formatTime(d.time as string, showDateInAxis.value)),
-      axisLabel: {
-        fontSize: 11,
-        color: chartThemeColors.value.textSecondary,
-        margin: 12,
+    grid: [latencyChartGrid, lossEventGrid],
+    xAxis: [
+      {
+        type: 'category',
+        gridIndex: 0,
+        data: data.map(d => formatTime(d.time as string, showDateInAxis.value)),
+        axisLabel: { show: false },
+        axisLine: {
+          show: true,
+          lineStyle: { color: chartThemeColors.value.borderColor, width: 1 },
+        },
+        axisTick: { show: false },
+        boundaryGap: false,
       },
-      axisLine: {
-        show: true,
-        lineStyle: { color: chartThemeColors.value.borderColor, width: 1 },
+      {
+        type: 'category',
+        gridIndex: 1,
+        data: data.map(d => formatTime(d.time as string, showDateInAxis.value)),
+        axisLabel: {
+          fontSize: 11,
+          color: chartThemeColors.value.textSecondary,
+          margin: 10,
+        },
+        axisLine: {
+          show: false,
+        },
+        axisTick: { show: false },
+        boundaryGap: false,
       },
-      axisTick: { show: false },
-      boundaryGap: false,
-    },
+    ],
     yAxis: [
       {
         type: 'value',
+        gridIndex: 0,
         name: '延迟 (ms)',
+        scale: true,
         nameTextStyle: { color: chartThemeColors.value.textSecondary },
         axisLabel: { fontSize: 11, color: chartThemeColors.value.textSecondary, formatter: '{value}' },
         axisLine: { show: false },
@@ -643,19 +768,16 @@ const pingChartOption = computed(() => {
       },
       {
         type: 'value',
-        name: '丢包率 (%)',
+        gridIndex: 1,
         min: 0,
-        max: 100,
-        interval: 25,
-        position: 'right',
-        nameTextStyle: { color: chartThemeColors.value.textSecondary },
-        axisLabel: { fontSize: 11, color: chartThemeColors.value.textSecondary, formatter: '{value}%' },
+        max: 1,
+        axisLabel: { show: false },
         axisLine: { show: false },
         axisTick: { show: false },
         splitLine: { show: false },
       },
     ],
-    series: [packetLossSeries, ...delaySeries],
+    series: [...delaySeries, packetLossSeries],
   }
 })
 
@@ -728,30 +850,26 @@ onBeforeUnmount(() => {
 
       <template v-else>
         <!-- 最新值统计卡片（可点击切换选中状态） -->
-        <div
-          v-if="latestValues.length > 0" class="gap-3 grid"
-          style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))"
-        >
+        <div v-if="latestValues.length > 0" class="overflow-hidden rounded-md bg-background/45 ring-1 ring-inset ring-slate-500/10">
           <div
             v-for="task in latestValues" :key="task.id"
-            class="p-2 rounded-md bg-background/50 hover:bg-background hover:shadow-[0_0_0_2px] hover:shadow-primary/10 flex gap-3 cursor-pointer select-none transition-all items-center"
+            class="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-t border-slate-500/10 p-2.5 cursor-pointer select-none transition-colors first:border-t-0 hover:bg-background/65"
             :class="[!selectedTaskIds.includes(task.id) && 'opacity-30']"
             :onmouseover="(e: MouseEvent) => ((e.currentTarget as HTMLElement).style.borderColor = task.color)"
             :onmouseout="(e: MouseEvent) => ((e.currentTarget as HTMLElement).style.borderColor = '')"
             @click="toggleTask(task.id)"
           >
-            <div class="flex-1 min-w-0">
+            <div class="min-w-0">
               <TooltipProvider>
-                <div class="flex gap-2 items-center">
-                  <div class="rounded h-4 w-1" :style="{ backgroundColor: task.color }" />
-                  <span class="text-sm font-semibold truncate">{{ task.name }}</span>
-                  <div class="flex-1" />
+                <div class="flex min-w-0 items-center gap-2">
+                  <div class="h-4 w-1 shrink-0 rounded" :style="{ backgroundColor: task.color }" />
+                  <span class="min-w-0 truncate text-sm font-semibold">{{ task.name }}</span>
                   <Tooltip
                     :open="isTouchTooltipMode ? activeTaskTooltipId === task.id : undefined"
                     @update:open="(open) => setTaskTooltipOpen(task.id, open)"
                   >
                     <TooltipTrigger as-child>
-                      <Button variant="ghost" size="icon-xs" class="text-slate-500" @click.stop="toggleTaskTooltip(task.id)">
+                      <Button variant="ghost" size="icon-xs" class="ml-auto shrink-0 text-slate-500" @click.stop="toggleTaskTooltip(task.id)">
                         <Icon icon="tabler:info-circle" :width="14" :height="14" />
                       </Button>
                     </TooltipTrigger>
@@ -773,17 +891,13 @@ onBeforeUnmount(() => {
                           <span class="text-muted-foreground">最新</span>
                           <span class="font-medium">{{ task.latest >= 0 ? `${Math.round(task.latest)} ms` : '丢包' }}</span>
                         </template>
-                        <template v-if="task.p50 !== undefined">
-                          <span class="text-muted-foreground">P50</span>
-                          <span class="font-medium">{{ Math.round(task.p50) }} ms</span>
+                        <template v-if="task.recentSampleCount !== undefined">
+                          <span class="text-muted-foreground">近10分钟记录</span>
+                          <span class="font-medium">{{ task.recentLostCount }}/{{ task.recentSampleCount }}</span>
                         </template>
-                        <template v-if="task.p99 !== undefined">
-                          <span class="text-muted-foreground">P99</span>
-                          <span class="font-medium">{{ Math.round(task.p99) }} ms</span>
-                        </template>
-                        <template v-if="task.p99_p50_ratio !== undefined">
-                          <span class="text-muted-foreground">波动率</span>
-                          <span class="font-medium">{{ task.p99_p50_ratio.toFixed(2) }}</span>
+                        <template v-if="task.total !== undefined">
+                          <span class="text-muted-foreground">{{ selectedRangeLabel }}记录</span>
+                          <span class="font-medium">{{ task.lostCount }}/{{ task.total }}</span>
                         </template>
                         <template v-if="task.interval !== undefined">
                           <span class="text-muted-foreground">间隔</span>
@@ -802,23 +916,23 @@ onBeforeUnmount(() => {
                   </Tooltip>
                 </div>
               </TooltipProvider>
-              <div class="text-xs mt-1 flex gap-1.5 items-center text-muted-foreground">
-                <span class="font-medium" title="平均延迟">
-                  {{ task.avg !== undefined ? `${Math.round(task.avg)}ms` : '-' }}
-                </span>
-                <span class="opacity-60">·</span>
-                <span title="丢包率">{{ task.loss.toFixed(2) }}%</span>
-                <template v-if="task.p99_p50_ratio !== undefined">
-                  <span class="opacity-60">·</span>
-                  <span title="波动率">{{ task.p99_p50_ratio.toFixed(2) }}</span>
-                </template>
-              </div>
+            </div>
+            <div class="shrink-0 text-right text-xs font-semibold tabular-nums text-foreground/90">
+              {{ formatCurrentValue(task) }}
+            </div>
+            <div class="col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground tabular-nums">
+              <span title="最近 10 分钟历史记录丢包">
+                近10分钟记录 <strong class="font-semibold text-foreground/85">{{ task.recentLostCount }}/{{ task.recentSampleCount }}</strong>
+              </span>
+              <span title="所选时间范围历史记录丢包">
+                {{ selectedRangeLabel }}记录 <strong class="font-semibold text-foreground/85">{{ task.lostCount }}/{{ task.total }}</strong>
+              </span>
             </div>
           </div>
         </div>
 
         <!-- 图表 -->
-        <div class="h-80 bg-background/50 p-4 rounded-md">
+        <div class="h-80 bg-background/50 p-3 rounded-md sm:p-4">
           <VChart :option="pingChartOption" autoresize />
         </div>
       </template>

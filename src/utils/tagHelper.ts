@@ -343,8 +343,11 @@ export function getRenewalDisplayInfo(
   const status = hasExpireDate ? getExpireStatus(source.expired_at) : 'warning'
   const overdueDays = Math.abs(days)
   const expireDateText = hasExpireDate ? expireDate.format('YYYY-MM-DD') : '-'
-  const priceText = formatPriceWithCycle(source.price, source.billing_cycle, source.currency, lang)
   const noRenewalRequired = status === 'long_term' || source.billing_cycle === -1 || source.price === -1
+  if (noRenewalRequired)
+    return null
+
+  const priceText = formatPriceWithCycle(source.price, source.billing_cycle, source.currency, lang)
   const renewalUrl = getRenewalUrlFromSource(source)
 
   if (lang === 'en-US') {
@@ -358,9 +361,9 @@ export function getRenewalDisplayInfo(
     const actionTextMap: Record<ExpireStatus, string> = {
       expired: 'Renew now',
       critical: 'Renew soon',
-      warning: 'Plan renewal',
+      warning: '',
       normal: '',
-      long_term: 'No action',
+      long_term: '',
     }
 
     return {
@@ -374,12 +377,10 @@ export function getRenewalDisplayInfo(
           ? (days === 0 ? 'Expires today' : `${overdueDays} days overdue`)
           : days === 0
             ? 'Expires today'
-            : status === 'long_term'
-              ? 'Long-term'
-              : `${days} days left`,
+            : `${days} days left`,
       priceText,
       renewalLinkText: 'Renew',
-      renewalModeText: noRenewalRequired ? 'No renewal' : source.auto_renewal ? 'Auto renew' : 'Manual renew',
+      renewalModeText: source.auto_renewal ? 'Auto renew' : 'Manual renew',
       renewalUrl,
       status,
       statusLabel: statusLabelMap[status],
@@ -396,9 +397,9 @@ export function getRenewalDisplayInfo(
   const actionTextMap: Record<ExpireStatus, string> = {
     expired: '立即续费',
     critical: '尽快续费',
-    warning: '安排续费',
+    warning: '',
     normal: '',
-    long_term: '无需续费',
+    long_term: '',
   }
 
   return {
@@ -412,12 +413,10 @@ export function getRenewalDisplayInfo(
         ? (days === 0 ? '今日到期' : `已过期 ${overdueDays} 天`)
         : days === 0
           ? '今日到期'
-          : status === 'long_term'
-            ? '长期有效'
-            : `剩余 ${days} 天`,
+          : `剩余 ${days} 天`,
     priceText,
     renewalLinkText: '去续费',
-    renewalModeText: noRenewalRequired ? '无需续费' : source.auto_renewal ? '自动续费' : '手动续费',
+    renewalModeText: source.auto_renewal ? '自动续费' : '手动续费',
     renewalUrl,
     status,
     statusLabel: statusLabelMap[status],

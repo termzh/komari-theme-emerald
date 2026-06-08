@@ -14,6 +14,8 @@ export interface NodePingTaskStats {
   avgLatency: number
   avgLoss: number
   avgVolatility: number
+  latestLatency: number
+  latestLost: boolean
   lostCount: number
   maxConsecutiveLost: number
   name: string
@@ -65,22 +67,15 @@ interface SharedPingRecordsEntry {
   loading: ReturnType<typeof ref<boolean>>
   error: ReturnType<typeof ref<string | null>>
   promise: Promise<void> | null
-  /** 增量补点去重状态：key=`${client}:${task_id}` → 上次补点的延迟值与时间戳 */
-  lastAppended: Map<string, { value: number, time: number }>
 }
 
 const HISTORY_BUCKET_COUNT = 20
-const CACHE_VERSION = 8
+const CACHE_VERSION = 11
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
-const RECENT_SAMPLE_COUNT = 10
+const RECENT_WINDOW_MS = 10 * 60 * 1000
 const ROLLING_LOSS_SAMPLE_COUNT = 5
-/** 接入实时增量更新的窗口（小时）；仅首页节点卡片使用的 1 小时记录 */
 const REALTIME_HOURS = 1
-/** 同一任务延迟值未变化时的最小补点间隔，避免每轮轮询堆叠重复点 */
-const MIN_APPEND_GAP_MS = 30_000
-/** 滚动窗口长度（1 小时） */
-const WINDOW_MS = 60 * 60 * 1000
 const sharedPingRecordsCache = new Map<number, SharedPingRecordsEntry>()
 const latestTaskNamesByClient = new Map<string, Map<number, string>>()
 
@@ -139,6 +134,8 @@ function isValidTaskStats(value: unknown): value is NodePingTaskStats {
   return typeof task.avgLatency === 'number'
     && typeof task.avgLoss === 'number'
     && typeof task.avgVolatility === 'number'
+    && typeof task.latestLatency === 'number'
+    && typeof task.latestLost === 'boolean'
     && typeof task.lostCount === 'number'
     && typeof task.maxConsecutiveLost === 'number'
     && typeof task.name === 'string'
@@ -219,7 +216,6 @@ function createSharedPingRecordsEntry(): SharedPingRecordsEntry {
     loading: ref(false),
     error: ref<string | null>(null),
     promise: null,
-    lastAppended: new Map(),
   }
 }
 
@@ -332,74 +328,18 @@ function mergeLatestTaskNames(target: Map<string, Map<number, string>>): boolean
   return mutated
 }
 
-/**
- * 将 getNodesLatestStatus 返回的最新 ping 快照增量合并进 1 小时共享记录。
- * 由 init.ts 的轮询每 N 秒调用一次，使首页节点卡片的 ping 柱状图持续滚动刷新，
- * 且不再产生额外的 getRecords 请求。
- */
 export function ingestLatestPing(statuses: Record<string, NodeStatus>): void {
   rememberStatusPingTaskNames(statuses)
 
   const entry = sharedPingRecordsCache.get(REALTIME_HOURS)
-  // 首屏 getRecords 尚未加载完成时直接跳过，避免凭空建空 entry 顶掉首次加载
   if (!entry || !entry.data.value)
     return
 
-  const recordsByClient = entry.data.value.recordsByClient
   const taskNamesByClient = entry.data.value.taskNamesByClient
-  let mutated = mergeLatestTaskNames(taskNamesByClient)
-  let anchorMs = 0
-
-  for (const [uuid, status] of Object.entries(statuses)) {
-    if (!status?.ping)
-      continue
-
-    const statusMs = new Date(status.time).getTime()
-    if (!Number.isFinite(statusMs))
-      continue
-    anchorMs = Math.max(anchorMs, statusMs)
-
-    for (const [taskKey, summary] of Object.entries(status.ping)) {
-      const taskId = Number(taskKey)
-      if (!Number.isFinite(taskId))
-        continue
-
-      const value = typeof summary.latest === 'number' && summary.latest >= 0
-        ? summary.latest
-        : -1
-      const dedupeKey = `${uuid}:${taskId}`
-      const previous = entry.lastAppended.get(dedupeKey)
-
-      // 去重：延迟值变化（含丢包跳变）或距上次补点已达最小间隔才追加
-      const valueChanged = !previous || previous.value !== value
-      const gapEnough = !previous || statusMs - previous.time >= MIN_APPEND_GAP_MS
-      if (!valueChanged && !gapEnough)
-        continue
-      // 同一状态快照时间不重复追加
-      if (previous && previous.time === statusMs)
-        continue
-
-      const clientRecords = recordsByClient.get(uuid) ?? []
-      clientRecords.push({ client: uuid, task_id: taskId, time: status.time, value })
-      recordsByClient.set(uuid, clientRecords)
-      entry.lastAppended.set(dedupeKey, { value, time: statusMs })
-      mutated = true
-    }
-  }
-
-  if (!mutated)
+  if (!mergeLatestTaskNames(taskNamesByClient))
     return
 
-  // 以服务端最新状态时间为锚点裁剪到 1 小时窗口（不依赖浏览器本地时钟）
-  const cutoff = (anchorMs || Date.now()) - WINDOW_MS
-  for (const [uuid, clientRecords] of recordsByClient) {
-    const pruned = clientRecords.filter(record => new Date(record.time).getTime() >= cutoff)
-    if (pruned.length !== clientRecords.length)
-      recordsByClient.set(uuid, pruned)
-  }
-
-  // 重新赋值 shallowRef 的包装对象，触发依赖 entry.data 的 computed 重算
-  entry.data.value = { recordsByClient, taskNamesByClient }
+  entry.data.value = { recordsByClient: entry.data.value.recordsByClient, taskNamesByClient }
 }
 
 function buildPingHistory(records: PingRecord[]): NodePingHistoryPoint[] {
@@ -495,6 +435,27 @@ function getTrailingLostCount(records: PingRecord[]): number {
   return count
 }
 
+function getRecordTimestamp(record: PingRecord): number {
+  const timestamp = new Date(record.time).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function getRecentRecords(records: PingRecord[]): PingRecord[] {
+  const latestRecord = records.at(-1)
+  if (!latestRecord)
+    return []
+
+  const latestTimestamp = getRecordTimestamp(latestRecord)
+  if (latestTimestamp <= 0)
+    return []
+
+  const startTime = latestTimestamp - RECENT_WINDOW_MS
+  return records.filter((record) => {
+    const timestamp = getRecordTimestamp(record)
+    return timestamp > startTime && timestamp <= latestTimestamp
+  })
+}
+
 function getMaxRollingLostCount(records: PingRecord[], windowSize: number): number {
   if (!records.length)
     return 0
@@ -533,10 +494,13 @@ function buildStats(records: PingRecord[], taskNames: Map<number, string> = new 
 
   for (const [taskId, recordsByTask] of taskRecords) {
     const sortedTaskRecords = [...recordsByTask].sort((left, right) => new Date(left.time).getTime() - new Date(right.time).getTime())
-    const recentRecords = sortedTaskRecords.slice(-RECENT_SAMPLE_COUNT)
+    const recentRecords = getRecentRecords(sortedTaskRecords)
     const validValues = sortedTaskRecords
       .map(record => record.value)
       .filter(value => value >= 0)
+    const latestRecord = sortedTaskRecords.at(-1)
+    const latestLost = latestRecord ? latestRecord.value < 0 : false
+    const latestLatency = latestRecord && latestRecord.value >= 0 ? latestRecord.value : 0
     const recentValidValues = recentRecords
       .map(record => record.value)
       .filter(value => value >= 0)
@@ -562,6 +526,8 @@ function buildStats(records: PingRecord[], taskNames: Map<number, string> = new 
         avgLatency: 0,
         avgLoss: taskLoss,
         avgVolatility: 0,
+        latestLatency,
+        latestLost,
         lostCount: taskLostCount,
         maxConsecutiveLost,
         name: taskNames.get(taskId) ?? `#${taskId}`,
@@ -597,6 +563,8 @@ function buildStats(records: PingRecord[], taskNames: Map<number, string> = new 
       avgLatency: taskLatency,
       avgLoss: taskLoss,
       avgVolatility: taskVolatility,
+      latestLatency,
+      latestLost,
       lostCount: taskLostCount,
       maxConsecutiveLost,
       name: taskNames.get(taskId) ?? `#${taskId}`,
@@ -657,8 +625,7 @@ export function useNodePingStats(
     enabled: toValue(options?.enabled) ?? true,
   }))
 
-  // stats 改为 computed：既在首次加载完成后派生，也在 ingestLatestPing 增量更新
-  // （重新赋值 entry.data）后自动重算，实现停留页面时的实时滚动刷新。
+  // stats 改为 computed：首次加载完成后从共享历史记录派生。
   const stats = computed<NodePingStatsState>(() => {
     const { uuid: nodeUuid, hours, enabled } = resolved.value
     if (!enabled || !nodeUuid.trim())
