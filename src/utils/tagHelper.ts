@@ -359,7 +359,7 @@ export function getRenewalDisplayInfo(
       expired: 'Renew now',
       critical: 'Renew soon',
       warning: 'Plan renewal',
-      normal: 'Track renewal',
+      normal: '',
       long_term: 'No action',
     }
 
@@ -397,7 +397,7 @@ export function getRenewalDisplayInfo(
     expired: '立即续费',
     critical: '尽快续费',
     warning: '安排续费',
-    normal: '续费计划',
+    normal: '',
     long_term: '无需续费',
   }
 

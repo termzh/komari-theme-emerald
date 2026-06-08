@@ -10,12 +10,38 @@ export interface NodePingHistoryPoint {
   loss: number | null
 }
 
+export interface NodePingTaskStats {
+  avgLatency: number
+  avgLoss: number
+  avgVolatility: number
+  lostCount: number
+  maxConsecutiveLost: number
+  name: string
+  recentAvgLatency: number
+  recentLostCount: number
+  recentLoss: number
+  recentMaxConsecutiveLost: number
+  recentMaxRollingLostCount: number
+  recentSampleCount: number
+  recentSuccessCount: number
+  sampleCount: number
+  successCount: number
+  taskId: number
+  trailingLostCount: number
+}
+
 export interface NodePingStatsState {
   avgLatency: number
   avgLoss: number
   avgVolatility: number
+  affectedTaskCount: number
   history: NodePingHistoryPoint[]
   hasData: boolean
+  lostCount: number
+  sampleCount: number
+  successCount: number
+  taskCount: number
+  tasks: NodePingTaskStats[]
 }
 
 interface PingRecord {
@@ -31,6 +57,7 @@ interface SharedPingRecordsResponse {
 
 interface SharedPingRecordsState {
   recordsByClient: Map<string, PingRecord[]>
+  taskNamesByClient: Map<string, Map<number, string>>
 }
 
 interface SharedPingRecordsEntry {
@@ -43,9 +70,11 @@ interface SharedPingRecordsEntry {
 }
 
 const HISTORY_BUCKET_COUNT = 20
-const CACHE_VERSION = 4
+const CACHE_VERSION = 8
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
+const RECENT_SAMPLE_COUNT = 10
+const ROLLING_LOSS_SAMPLE_COUNT = 5
 /** 接入实时增量更新的窗口（小时）；仅首页节点卡片使用的 1 小时记录 */
 const REALTIME_HOURS = 1
 /** 同一任务延迟值未变化时的最小补点间隔，避免每轮轮询堆叠重复点 */
@@ -53,19 +82,21 @@ const MIN_APPEND_GAP_MS = 30_000
 /** 滚动窗口长度（1 小时） */
 const WINDOW_MS = 60 * 60 * 1000
 const sharedPingRecordsCache = new Map<number, SharedPingRecordsEntry>()
-
-interface TaskRecordSummary {
-  total: number
-  success: number
-}
+const latestTaskNamesByClient = new Map<string, Map<number, string>>()
 
 function createEmptyStats(): NodePingStatsState {
   return {
     avgLatency: 0,
     avgLoss: 0,
     avgVolatility: 0,
+    affectedTaskCount: 0,
     history: [],
     hasData: false,
+    lostCount: 0,
+    sampleCount: 0,
+    successCount: 0,
+    taskCount: 0,
+    tasks: [],
   }
 }
 
@@ -79,29 +110,8 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-function summarizeTaskRecords(records: PingRecord[]): Map<number, TaskRecordSummary> {
-  const summaries = new Map<number, TaskRecordSummary>()
-
-  for (const record of records) {
-    const summary = summaries.get(record.task_id) ?? { total: 0, success: 0 }
-    summary.total += 1
-    if (record.value >= 0) {
-      summary.success += 1
-    }
-    summaries.set(record.task_id, summary)
-  }
-
-  return summaries
-}
-
 function getIncludedTaskIds(records: PingRecord[]): Set<number> {
-  const recordSummaries = summarizeTaskRecords(records)
-
-  return new Set(
-    [...recordSummaries.entries()]
-      .filter(([, summary]) => summary.total > 0 && summary.success > 0)
-      .map(([taskId]) => taskId),
-  )
+  return new Set(records.map(record => record.task_id))
 }
 
 function getCacheKey(uuid: string, hours: number): string {
@@ -121,6 +131,30 @@ function isValidHistoryPoint(value: unknown): value is NodePingHistoryPoint {
     && (loss === null || typeof loss === 'number')
 }
 
+function isValidTaskStats(value: unknown): value is NodePingTaskStats {
+  if (!value || typeof value !== 'object')
+    return false
+
+  const task = value as Record<string, unknown>
+  return typeof task.avgLatency === 'number'
+    && typeof task.avgLoss === 'number'
+    && typeof task.avgVolatility === 'number'
+    && typeof task.lostCount === 'number'
+    && typeof task.maxConsecutiveLost === 'number'
+    && typeof task.name === 'string'
+    && typeof task.recentAvgLatency === 'number'
+    && typeof task.recentLostCount === 'number'
+    && typeof task.recentLoss === 'number'
+    && typeof task.recentMaxConsecutiveLost === 'number'
+    && typeof task.recentMaxRollingLostCount === 'number'
+    && typeof task.recentSampleCount === 'number'
+    && typeof task.recentSuccessCount === 'number'
+    && typeof task.sampleCount === 'number'
+    && typeof task.successCount === 'number'
+    && typeof task.taskId === 'number'
+    && typeof task.trailingLostCount === 'number'
+}
+
 function isValidStatsState(value: unknown): value is NodePingStatsState {
   if (!value || typeof value !== 'object')
     return false
@@ -129,9 +163,16 @@ function isValidStatsState(value: unknown): value is NodePingStatsState {
   return typeof state.avgLatency === 'number'
     && typeof state.avgLoss === 'number'
     && typeof state.avgVolatility === 'number'
+    && typeof state.affectedTaskCount === 'number'
     && typeof state.hasData === 'boolean'
+    && typeof state.lostCount === 'number'
+    && typeof state.sampleCount === 'number'
+    && typeof state.successCount === 'number'
+    && typeof state.taskCount === 'number'
     && Array.isArray(state.history)
     && state.history.every(isValidHistoryPoint)
+    && Array.isArray(state.tasks)
+    && state.tasks.every(isValidTaskStats)
 }
 
 function readStatsCache(uuid: string, hours: number): NodePingStatsState | null {
@@ -230,6 +271,7 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
 
       entry.data.value = {
         recordsByClient: buildRecordsByClient(result?.records ?? []),
+        taskNamesByClient: cloneTaskNamesByClient(),
       }
     }
     catch (err) {
@@ -245,19 +287,67 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
   return entry.promise
 }
 
+function cloneTaskNamesByClient(): Map<string, Map<number, string>> {
+  const cloned = new Map<string, Map<number, string>>()
+  for (const [client, taskNames] of latestTaskNamesByClient)
+    cloned.set(client, new Map(taskNames))
+  return cloned
+}
+
+function rememberTaskName(client: string, taskId: number, name: string): void {
+  const taskName = name.trim()
+  if (!taskName)
+    return
+
+  const taskNames = latestTaskNamesByClient.get(client) ?? new Map<number, string>()
+  taskNames.set(taskId, taskName)
+  latestTaskNamesByClient.set(client, taskNames)
+}
+
+function rememberStatusPingTaskNames(statuses: Record<string, NodeStatus>): void {
+  for (const [uuid, status] of Object.entries(statuses)) {
+    if (!status?.ping)
+      continue
+
+    for (const [taskKey, summary] of Object.entries(status.ping)) {
+      const taskId = Number(taskKey)
+      if (Number.isFinite(taskId))
+        rememberTaskName(uuid, taskId, summary.name ?? '')
+    }
+  }
+}
+
+function mergeLatestTaskNames(target: Map<string, Map<number, string>>): boolean {
+  let mutated = false
+  for (const [uuid, latestTaskNames] of latestTaskNamesByClient) {
+    const taskNames = target.get(uuid) ?? new Map<number, string>()
+    for (const [taskId, name] of latestTaskNames) {
+      if (taskNames.get(taskId) === name)
+        continue
+      taskNames.set(taskId, name)
+      mutated = true
+    }
+    target.set(uuid, taskNames)
+  }
+  return mutated
+}
+
 /**
  * 将 getNodesLatestStatus 返回的最新 ping 快照增量合并进 1 小时共享记录。
  * 由 init.ts 的轮询每 N 秒调用一次，使首页节点卡片的 ping 柱状图持续滚动刷新，
  * 且不再产生额外的 getRecords 请求。
  */
 export function ingestLatestPing(statuses: Record<string, NodeStatus>): void {
+  rememberStatusPingTaskNames(statuses)
+
   const entry = sharedPingRecordsCache.get(REALTIME_HOURS)
   // 首屏 getRecords 尚未加载完成时直接跳过，避免凭空建空 entry 顶掉首次加载
   if (!entry || !entry.data.value)
     return
 
   const recordsByClient = entry.data.value.recordsByClient
-  let mutated = false
+  const taskNamesByClient = entry.data.value.taskNamesByClient
+  let mutated = mergeLatestTaskNames(taskNamesByClient)
   let anchorMs = 0
 
   for (const [uuid, status] of Object.entries(statuses)) {
@@ -309,7 +399,7 @@ export function ingestLatestPing(statuses: Record<string, NodeStatus>): void {
   }
 
   // 重新赋值 shallowRef 的包装对象，触发依赖 entry.data 的 computed 重算
-  entry.data.value = { recordsByClient }
+  entry.data.value = { recordsByClient, taskNamesByClient }
 }
 
 function buildPingHistory(records: PingRecord[]): NodePingHistoryPoint[] {
@@ -371,7 +461,54 @@ function getPercentile(values: number[], percentile: number): number | null {
   return lowerValue + (upperValue - lowerValue) * (position - lowerIndex)
 }
 
-function buildStats(records: PingRecord[]): NodePingStatsState {
+function countLost(records: PingRecord[]): number {
+  return records.filter(record => record.value < 0).length
+}
+
+function getMaxConsecutiveLost(records: PingRecord[]): number {
+  let maxLost = 0
+  let currentLost = 0
+
+  for (const record of records) {
+    if (record.value < 0) {
+      currentLost += 1
+      maxLost = Math.max(maxLost, currentLost)
+    }
+    else {
+      currentLost = 0
+    }
+  }
+
+  return maxLost
+}
+
+function getTrailingLostCount(records: PingRecord[]): number {
+  let count = 0
+
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]
+    if (!record || record.value >= 0)
+      break
+    count += 1
+  }
+
+  return count
+}
+
+function getMaxRollingLostCount(records: PingRecord[], windowSize: number): number {
+  if (!records.length)
+    return 0
+
+  let maxLost = 0
+  for (let index = 0; index < records.length; index += 1) {
+    const windowRecords = records.slice(index, index + windowSize)
+    maxLost = Math.max(maxLost, countLost(windowRecords))
+  }
+
+  return maxLost
+}
+
+function buildStats(records: PingRecord[], taskNames: Map<number, string> = new Map()): NodePingStatsState {
   const includedTaskIds = getIncludedTaskIds(records)
 
   if (!includedTaskIds.size)
@@ -390,25 +527,91 @@ function buildStats(records: PingRecord[]): NodePingStatsState {
   const latencyValues: number[] = []
   const taskLossValues: number[] = []
   const volatilityValues: number[] = []
+  const tasks: NodePingTaskStats[] = []
+  let affectedTaskCount = 0
+  let lostCount = 0
 
-  for (const recordsByTask of taskRecords.values()) {
-    const validValues = recordsByTask
+  for (const [taskId, recordsByTask] of taskRecords) {
+    const sortedTaskRecords = [...recordsByTask].sort((left, right) => new Date(left.time).getTime() - new Date(right.time).getTime())
+    const recentRecords = sortedTaskRecords.slice(-RECENT_SAMPLE_COUNT)
+    const validValues = sortedTaskRecords
       .map(record => record.value)
       .filter(value => value >= 0)
+    const recentValidValues = recentRecords
+      .map(record => record.value)
+      .filter(value => value >= 0)
+    const taskLostCount = sortedTaskRecords.length - validValues.length
+    const recentLostCount = recentRecords.length - recentValidValues.length
+    const recentSampleCount = recentRecords.length
+    const recentLoss = recentSampleCount > 0 ? recentLostCount / recentSampleCount * 100 : 0
+    const maxConsecutiveLost = getMaxConsecutiveLost(sortedTaskRecords)
+    const recentMaxConsecutiveLost = getMaxConsecutiveLost(recentRecords)
+    const recentMaxRollingLostCount = getMaxRollingLostCount(recentRecords, ROLLING_LOSS_SAMPLE_COUNT)
+    const trailingLostCount = getTrailingLostCount(sortedTaskRecords)
+    let taskVolatility = 0
+    lostCount += taskLostCount
 
-    if (!validValues.length)
+    if (taskLostCount > 0)
+      affectedTaskCount += 1
+
+    const taskLoss = taskLostCount / sortedTaskRecords.length * 100
+    taskLossValues.push(taskLoss)
+
+    if (!validValues.length) {
+      tasks.push({
+        avgLatency: 0,
+        avgLoss: taskLoss,
+        avgVolatility: 0,
+        lostCount: taskLostCount,
+        maxConsecutiveLost,
+        name: taskNames.get(taskId) ?? `#${taskId}`,
+        recentAvgLatency: 0,
+        recentLostCount,
+        recentLoss,
+        recentMaxConsecutiveLost,
+        recentMaxRollingLostCount,
+        recentSampleCount,
+        recentSuccessCount: recentValidValues.length,
+        sampleCount: sortedTaskRecords.length,
+        successCount: 0,
+        taskId,
+        trailingLostCount,
+      })
       continue
+    }
 
-    latencyValues.push(average(validValues))
-    taskLossValues.push((recordsByTask.length - validValues.length) / recordsByTask.length * 100)
+    const taskLatency = average(validValues)
+    const recentTaskLatency = average(recentValidValues)
+    latencyValues.push(taskLatency)
 
     if (validValues.length > 1) {
       const p50 = getPercentile(validValues, 0.5)
       const p99 = getPercentile(validValues, 0.99)
       if (isFiniteNumber(p50) && isFiniteNumber(p99) && p50 > FULL_LOSS_EPSILON) {
-        volatilityValues.push(p99 / p50)
+        taskVolatility = p99 / p50
+        volatilityValues.push(taskVolatility)
       }
     }
+
+    tasks.push({
+      avgLatency: taskLatency,
+      avgLoss: taskLoss,
+      avgVolatility: taskVolatility,
+      lostCount: taskLostCount,
+      maxConsecutiveLost,
+      name: taskNames.get(taskId) ?? `#${taskId}`,
+      recentAvgLatency: recentTaskLatency,
+      recentLostCount,
+      recentLoss,
+      recentMaxConsecutiveLost,
+      recentMaxRollingLostCount,
+      recentSampleCount,
+      recentSuccessCount: recentValidValues.length,
+      sampleCount: sortedTaskRecords.length,
+      successCount: validValues.length,
+      taskId,
+      trailingLostCount,
+    })
   }
 
   const historyLatencyValues = history
@@ -427,8 +630,14 @@ function buildStats(records: PingRecord[]): NodePingStatsState {
     avgLatency,
     avgLoss,
     avgVolatility,
+    affectedTaskCount,
     history,
     hasData,
+    lostCount,
+    sampleCount: filteredRecords.length,
+    successCount: filteredRecords.length - lostCount,
+    taskCount: taskRecords.size,
+    tasks: tasks.sort((left, right) => left.taskId - right.taskId),
   }
 }
 
@@ -463,7 +672,8 @@ export function useNodePingStats(
       return readStatsCache(nodeUuid, hours) ?? createEmptyStats()
 
     const records = state.recordsByClient.get(nodeUuid) ?? []
-    return records.length ? buildStats(records) : createEmptyStats()
+    const taskNames = state.taskNamesByClient.get(nodeUuid) ?? new Map()
+    return records.length ? buildStats(records, taskNames) : createEmptyStats()
   })
 
   // 副作用：按需触发首次共享加载并维护 loading/error，不再命令式写入 stats。
@@ -530,6 +740,12 @@ export function useNodePingStats(
     avgLatency: computed(() => stats.value.avgLatency),
     avgLoss: computed(() => stats.value.avgLoss),
     avgVolatility: computed(() => stats.value.avgVolatility),
+    affectedTaskCount: computed(() => stats.value.affectedTaskCount),
+    lostCount: computed(() => stats.value.lostCount),
+    sampleCount: computed(() => stats.value.sampleCount),
+    successCount: computed(() => stats.value.successCount),
+    taskCount: computed(() => stats.value.taskCount),
+    tasks: computed(() => stats.value.tasks),
     hasData: computed(() => stats.value.hasData),
   }
 }
