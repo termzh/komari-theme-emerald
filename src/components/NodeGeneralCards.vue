@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ExpireStatus, RenewalDisplayInfo } from '@/utils/tagHelper'
 import { Icon } from '@iconify/vue'
 import { useIntervalFn } from '@vueuse/core'
 import dayjs from 'dayjs'
@@ -8,12 +9,28 @@ import { CardX } from '@/components/ui/card-x'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { formatBytesPerSecondSplit, formatBytesSplit } from '@/utils/helper'
+import { getRenewalDisplayInfo } from '@/utils/tagHelper'
 
 const appStore = useAppStore()
 const nodesStore = useNodesStore()
 
 const now = ref(dayjs())
 const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+const RENEWAL_STATUS_RANK: Record<ExpireStatus, number> = {
+  expired: 0,
+  critical: 1,
+  warning: 2,
+  normal: 3,
+  long_term: 4,
+}
+const RENEWAL_ATTENTION_STATUSES = new Set<ExpireStatus>(['expired', 'critical', 'warning'])
+const RENEWAL_REMINDER_LIMIT = 3
+
+interface RenewalReminderItem {
+  info: RenewalDisplayInfo
+  name: string
+  uuid: string
+}
 
 useIntervalFn(() => {
   now.value = dayjs()
@@ -60,6 +77,99 @@ const topUploadNodes = computed(() => {
     percentage: maxSpeed > 0 ? Math.max(8, node.speed / maxSpeed * 100) : 0,
   }))
 })
+
+const renewalItems = computed(() => {
+  const items: RenewalReminderItem[] = []
+
+  for (const node of nodesStore.nodes) {
+    const info = getRenewalDisplayInfo(node, appStore.lang)
+    if (!info)
+      continue
+
+    items.push({
+      uuid: node.uuid,
+      name: node.name,
+      info,
+    })
+  }
+
+  return items.sort((a, b) => {
+    const statusDiff = RENEWAL_STATUS_RANK[a.info.status] - RENEWAL_STATUS_RANK[b.info.status]
+    if (statusDiff !== 0)
+      return statusDiff
+    return a.info.days - b.info.days
+  })
+})
+
+const renewalAttentionCount = computed(() =>
+  renewalItems.value.filter(item => RENEWAL_ATTENTION_STATUSES.has(item.info.status)).length,
+)
+
+const displayedRenewalItems = computed(() => {
+  const attentionItems = renewalItems.value.filter(item => RENEWAL_ATTENTION_STATUSES.has(item.info.status))
+  const source = attentionItems.length > 0 ? attentionItems : renewalItems.value
+  return source.slice(0, RENEWAL_REMINDER_LIMIT)
+})
+
+const hiddenRenewalItemCount = computed(() => {
+  const sourceCount = renewalAttentionCount.value > 0 ? renewalAttentionCount.value : renewalItems.value.length
+  return Math.max(0, sourceCount - displayedRenewalItems.value.length)
+})
+
+const renewalSummaryText = computed(() => {
+  if (renewalAttentionCount.value > 0)
+    return `需续费 ${renewalAttentionCount.value} 台`
+  if (renewalItems.value.length > 0)
+    return '暂无临期'
+  return '暂无续费项'
+})
+
+function getRenewalReminderLabel(status: ExpireStatus): string {
+  switch (status) {
+    case 'expired': return '已逾期'
+    case 'critical': return '7天内'
+    case 'warning': return '15天内'
+    case 'normal': return '>15天'
+    case 'long_term': return '长期'
+    default: return ''
+  }
+}
+
+function getRenewalReminderRowClass(status: ExpireStatus): string {
+  switch (status) {
+    case 'expired':
+    case 'critical': return 'bg-red-500/[0.06] ring-red-500/20'
+    case 'warning': return 'bg-amber-500/[0.07] ring-amber-500/20'
+    default: return 'bg-slate-500/[0.05] ring-slate-500/10'
+  }
+}
+
+function getRenewalReminderBadgeClass(status: ExpireStatus): string {
+  switch (status) {
+    case 'expired':
+    case 'critical': return 'bg-red-500/10 text-red-700 ring-red-500/20 dark:text-red-300'
+    case 'warning': return 'bg-amber-500/15 text-amber-700 ring-amber-500/25 dark:text-amber-300'
+    default: return 'bg-slate-500/10 text-muted-foreground ring-slate-500/15'
+  }
+}
+
+function getRenewalReminderTextClass(status: ExpireStatus): string {
+  switch (status) {
+    case 'expired':
+    case 'critical': return 'text-red-600 dark:text-red-400'
+    case 'warning': return 'text-amber-600 dark:text-amber-400'
+    default: return 'text-muted-foreground'
+  }
+}
+
+function getRenewalReminderActionClass(status: ExpireStatus): string {
+  switch (status) {
+    case 'expired':
+    case 'critical': return 'bg-red-600 text-white shadow-sm shadow-red-600/15'
+    case 'warning': return 'bg-amber-500 text-white shadow-sm shadow-amber-500/15'
+    default: return 'bg-slate-600 text-white shadow-sm shadow-slate-600/10'
+  }
+}
 
 const showEarth = computed(() => !appStore.hideEarth)
 const wrapperClass = computed(() => showEarth.value
@@ -217,6 +327,66 @@ const cardGridClass = computed(() => showEarth.value
         </div>
         <div v-else class="min-w-0 rounded-md bg-slate-500/[0.05] px-2 py-1.5 text-xs text-muted-foreground">
           暂无在线节点
+        </div>
+      </div>
+
+      <div class="col-span-2 flex min-w-0 flex-col gap-2 rounded-lg bg-background/60 px-3 py-2 shadow-[0_0_0_1px] shadow-slate-500/8 backdrop-blur-md lg:col-span-4 lg:flex-row lg:items-center">
+        <div class="flex min-w-0 items-center justify-between gap-2 lg:w-52 lg:shrink-0">
+          <div class="flex min-w-0 items-center gap-1.5 text-[11px] font-medium tracking-wider text-muted-foreground">
+            <Icon icon="tabler:calendar-dollar" :width="14" :height="14" class="shrink-0 text-amber-600" />
+            <span class="shrink-0">机器到期</span>
+            <span class="min-w-0 truncate rounded-sm bg-slate-500/[0.06] px-1.5 py-0.5 text-[10px] font-semibold leading-3 text-foreground/70 ring-1 ring-inset ring-slate-500/10">
+              {{ renewalSummaryText }}
+            </span>
+          </div>
+          <span
+            v-if="hiddenRenewalItemCount > 0"
+            class="shrink-0 text-[10px] font-medium leading-3 text-muted-foreground tabular-nums"
+          >
+            +{{ hiddenRenewalItemCount }} 台
+          </span>
+        </div>
+
+        <div v-if="displayedRenewalItems.length" class="grid min-w-0 flex-1 grid-cols-1 gap-1.5 md:grid-cols-2 xl:grid-cols-3">
+          <div
+            v-for="item in displayedRenewalItems" :key="item.uuid"
+            class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs ring-1 ring-inset"
+            :class="getRenewalReminderRowClass(item.info.status)"
+            :title="`${item.name} · ${item.info.expireText} · ${item.info.expireLabel} ${item.info.expireDateText} · ${item.info.priceText}`"
+          >
+            <span
+              class="shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold leading-3 ring-1 ring-inset"
+              :class="getRenewalReminderBadgeClass(item.info.status)"
+            >
+              {{ getRenewalReminderLabel(item.info.status) }}
+            </span>
+            <span class="min-w-0 flex-1 truncate font-semibold text-foreground/85" :title="item.name">
+              {{ item.name }}
+            </span>
+            <span class="shrink-0 font-bold tabular-nums" :class="getRenewalReminderTextClass(item.info.status)">
+              {{ item.info.expireText }}
+            </span>
+            <span class="hidden shrink-0 text-[10px] text-muted-foreground tabular-nums sm:inline">
+              {{ item.info.expireDateText }}
+            </span>
+            <a
+              v-if="item.info.renewalUrl"
+              :href="item.info.renewalUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              :title="item.info.renewalLinkText"
+              class="inline-flex size-5 shrink-0 items-center justify-center rounded-sm"
+              :class="getRenewalReminderActionClass(item.info.status)"
+              :aria-label="`${item.name} 去官网续费`"
+              @click.stop
+            >
+              <Icon icon="tabler:external-link" :width="11" :height="11" class="shrink-0" />
+            </a>
+          </div>
+        </div>
+
+        <div v-else class="min-w-0 rounded-md bg-slate-500/[0.05] px-2 py-1.5 text-xs text-muted-foreground">
+          暂无续费节点
         </div>
       </div>
     </div>
